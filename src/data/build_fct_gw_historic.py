@@ -124,7 +124,27 @@ def _build_one_season(
             f"{season}: removed "
             f"{rows_removed:,} exact source duplicate rows"
         )
-
+    # ---------------------------------------------------------
+    # Remove non-player rows (e.g. Assistant Managers).
+    # Only GK / DEF / MID / FWD belong in the modelling table.
+    # ---------------------------------------------------------
+    
+    valid_positions = ["GK", "DEF", "MID", "FWD"]
+    
+    non_player_rows = ~gw["position"].isin(valid_positions)
+    
+    non_player_rows_removed = non_player_rows.sum()
+    
+    if non_player_rows_removed > 0:
+        print(
+            f"{season}: removed "
+            f"{non_player_rows_removed:,} non-player rows"
+        )
+    
+    gw = gw[
+        gw["position"].isin(valid_positions)
+    ].copy()
+    
     required = {"element", "fixture", "name", "position", "team", "opponent_team"}
     missing = required - set(gw.columns)
     if missing:
