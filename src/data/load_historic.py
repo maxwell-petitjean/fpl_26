@@ -4,8 +4,8 @@ import pandas as pd
 DEFAULT_SEASONS = ["2021-22", "2022-23", "2023-24", "2024-25", "2025-26"]
 
 
-def load_vaastav_raw(base_dir="data/raw/vaastav", seasons=None):
-    """Load Vaastav raw files without joining or transforming them.
+def load_historic_raw(base_dir="data/raw/historic", seasons=None):
+    """Load Historic Vaastav raw files without joining or transforming them.
 
     Returns
     -------
@@ -29,7 +29,7 @@ def load_vaastav_raw(base_dir="data/raw/vaastav", seasons=None):
 
 
 if __name__ == "__main__":
-    data = load_vaastav_raw()
+    data = load_historic_raw()
     for season, tables in data.items():
         print(f"\n{season}")
         for name, df in tables.items():
