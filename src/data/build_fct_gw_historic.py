@@ -109,6 +109,22 @@ def _build_one_season(
     """Build one season of the historic player-fixture fact table."""
     gw = _normalise_gameweek_column(gameweeks)
 
+    # Remove exact duplicate source rows only.
+    # Keep the grain validation later so genuinely conflicting
+    # player-fixture records still fail loudly.
+    
+    rows_before = len(gw)
+    
+    gw = gw.drop_duplicates().copy()
+    
+    rows_removed = rows_before - len(gw)
+    
+    if rows_removed > 0:
+        print(
+            f"{season}: removed "
+            f"{rows_removed:,} exact source duplicate rows"
+        )
+
     required = {"element", "fixture", "name", "position", "team", "opponent_team"}
     missing = required - set(gw.columns)
     if missing:
