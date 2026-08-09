@@ -5,7 +5,7 @@ DEFAULT_SEASONS = ["2021-22", "2022-23", "2023-24", "2024-25", "2025-26"]
 POSITION_MAP = {1: "GK", 2: "DEF", 3: "MID", 4: "FWD"}
 
 
-def build_player_season_map(base_dir="data/raw/vaastav", seasons=None):
+def build_player_season_map(base_dir="data/raw/historic", seasons=None):
     """Build a season-level identity table from players_raw.csv only.
 
     This does NOT join gameweek files together. It simply creates the bridge
