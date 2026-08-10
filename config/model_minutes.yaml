@@ -7,7 +7,7 @@ test_seasons:
 
 # If the standard deviation of a player's prior 6 fixture minutes is
 # <= this threshold, use avg_mins_l6 directly instead of LightGBM.
-stable_std_threshold: 5.0
+stable_std_threshold: 20.0
 
 use_position: true
 use_context: false
