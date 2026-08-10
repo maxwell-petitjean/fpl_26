@@ -32,6 +32,68 @@ def _load_config(config_path: str | Path) -> dict:
     with open(config_path, "r") as f:
         return yaml.safe_load(f)
 
+def _add_kickoff_context(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Derive current-fixture kickoff context.
+
+    Day type:
+      Mon / Fri       -> primetime
+      Tue / Wed / Thu -> midweek
+      Sat / Sun       -> weekend
+
+    Time type:
+      before 14:00          -> lunchtime
+      14:00 to before 17:30 -> afternoon
+      17:30 onwards         -> evening
+    """
+    out = df.copy()
+
+    kickoff = pd.to_datetime(
+        out["kickoff_time"],
+        utc=True,
+        errors="coerce",
+    )
+
+    out["kickoff_day_of_week"] = kickoff.dt.day_name()
+
+    out["kickoff_hour"] = (
+        kickoff.dt.hour
+        + kickoff.dt.minute / 60
+    )
+
+    day_map = {
+        "Monday": "primetime",
+        "Friday": "primetime",
+        "Tuesday": "midweek",
+        "Wednesday": "midweek",
+        "Thursday": "midweek",
+        "Saturday": "weekend",
+        "Sunday": "weekend",
+    }
+
+    out["kickoff_day_type"] = (
+        out["kickoff_day_of_week"]
+        .map(day_map)
+    )
+
+    out["kickoff_time_type"] = np.select(
+        [
+            out["kickoff_hour"] < 14,
+            out["kickoff_hour"] < 17.5,
+        ],
+        [
+            "lunchtime",
+            "afternoon",
+        ],
+        default="evening",
+    )
+
+    out.loc[
+        kickoff.isna(),
+        "kickoff_time_type"
+    ] = pd.NA
+
+    return out
 
 def _add_global_match_index(df: pd.DataFrame) -> pd.DataFrame:
     """
