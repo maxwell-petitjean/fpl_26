@@ -5,7 +5,6 @@ import pandas as pd
 import yaml
 
 from lightgbm import LGBMRegressor
-from sklearn.ensemble import HistGradientBoostingRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
 
@@ -31,13 +30,9 @@ def _select_features(df: pd.DataFrame, config: dict):
 
     for prefix in config["minutes_feature_prefixes"]:
         features.extend(
-            sorted(
-                c for c in df.columns
-                if c.startswith(prefix)
-            )
+            sorted(c for c in df.columns if c.startswith(prefix))
         )
 
-    # Optional live/historic injury field.
     chance_col = config.get("chance_of_playing_feature")
     if (
         config.get("use_chance_of_playing", False)
@@ -45,9 +40,7 @@ def _select_features(df: pd.DataFrame, config: dict):
     ):
         features.append(chance_col)
 
-    # Remove duplicates while keeping order.
-    features = list(dict.fromkeys(features))
-    return features
+    return list(dict.fromkeys(features))
 
 
 def _encode_inputs(
@@ -70,7 +63,7 @@ def _encode_inputs(
 
             levels = CONTEXT_LEVELS.get(
                 col,
-                sorted(df[col].dropna().astype(str).unique())
+                sorted(df[col].dropna().astype(str).unique()),
             )
 
             for level in levels:
@@ -84,22 +77,154 @@ def _encode_inputs(
 def _metrics(y_true, y_pred):
     return {
         "mae": mean_absolute_error(y_true, y_pred),
-        "rmse": mean_squared_error(
-            y_true, y_pred
-        ) ** 0.5,
+        "rmse": mean_squared_error(y_true, y_pred) ** 0.5,
     }
 
 
-def _minutes_bucket(minutes):
-    if minutes == 0:
-        return "0"
-    if minutes < 45:
-        return "1-44"
-    if minutes < 60:
-        return "45-59"
-    if minutes < 90:
-        return "60-89"
-    return "90+"
+def _add_last6_std(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calculate std dev of prior 6 fixture minutes, continuously across seasons.
+    Current fixture is excluded via shift(1).
+    """
+    out = df.copy()
+
+    out["kickoff_time"] = pd.to_datetime(
+        out["kickoff_time"], utc=True, errors="coerce"
+    )
+
+    out = out.sort_values(
+        ["player_code", "kickoff_time", "season", "gameweek", "fixture_id"]
+    ).reset_index(drop=True)
+
+    shifted_minutes = (
+        out.groupby("player_code", sort=False)["minutes"]
+        .shift(1)
+    )
+
+    out["player_minutes_std_l6"] = (
+        shifted_minutes
+        .groupby(out["player_code"])
+        .rolling(window=6, min_periods=2)
+        .std()
+        .reset_index(level=0, drop=True)
+    )
+
+    return out
+
+
+def _load_manual_overrides(path: str | Path) -> pd.DataFrame:
+    path = Path(path)
+
+    if not path.exists():
+        return pd.DataFrame(
+            columns=[
+                "player_code",
+                "web_name",
+                "override_minutes",
+                "reason",
+                "active",
+            ]
+        )
+
+    overrides = pd.read_csv(path, low_memory=False)
+
+    required = {
+        "player_code",
+        "override_minutes",
+        "active",
+    }
+    missing = required - set(overrides.columns)
+
+    if missing:
+        raise ValueError(
+            f"Manual override file missing columns: {sorted(missing)}"
+        )
+
+    overrides["active"] = (
+        overrides["active"]
+        .astype(str)
+        .str.strip()
+        .str.upper()
+        .isin(["TRUE", "1", "YES", "Y"])
+    )
+
+    overrides["override_minutes"] = pd.to_numeric(
+        overrides["override_minutes"], errors="coerce"
+    )
+
+    overrides = overrides[
+        overrides["active"]
+        & overrides["player_code"].notna()
+        & overrides["override_minutes"].notna()
+    ].copy()
+
+    overrides["player_code"] = pd.to_numeric(
+        overrides["player_code"], errors="coerce"
+    )
+
+    overrides["override_minutes"] = overrides[
+        "override_minutes"
+    ].clip(0, 90)
+
+    return overrides
+
+
+def _apply_manual_overrides(
+    pred_df: pd.DataFrame,
+    config: dict,
+) -> pd.DataFrame:
+    """
+    Apply active manual overrides on top of hybrid predictions.
+
+    Intended primarily for current/live predictions.
+    During historic validation this usually does nothing unless the user
+    deliberately supplies matching player codes.
+    """
+    overrides = _load_manual_overrides(
+        config["manual_override_path"]
+    )
+
+    out = pred_df.copy()
+    out["manual_override_applied"] = False
+    out["manual_override_reason"] = pd.NA
+
+    if overrides.empty:
+        return out
+
+    keep = [
+        c for c in [
+            "player_code",
+            "override_minutes",
+            "reason",
+        ]
+        if c in overrides.columns
+    ]
+
+    overrides = overrides[keep].drop_duplicates(
+        "player_code", keep="last"
+    )
+
+    out = out.merge(
+        overrides,
+        on="player_code",
+        how="left",
+        validate="many_to_one",
+    )
+
+    mask = out["override_minutes"].notna()
+
+    out.loc[mask, "final_predicted_minutes"] = (
+        out.loc[mask, "override_minutes"]
+    )
+    out.loc[mask, "manual_override_applied"] = True
+
+    if "reason" in out.columns:
+        out.loc[mask, "manual_override_reason"] = (
+            out.loc[mask, "reason"]
+        )
+        out = out.drop(columns=["reason"])
+
+    return out
 
 
 def run_minutes_model_test(
@@ -112,70 +237,91 @@ def run_minutes_model_test(
 
     target = config["target"]
     baseline_feature = config["baseline_feature"]
+    stable_threshold = float(config["stable_std_threshold"])
 
     required = [
         "season",
+        "gameweek",
+        "fixture_id",
+        "kickoff_time",
         "player_code",
         "player_name",
         "position",
+        "minutes",
         target,
         baseline_feature,
     ]
+
     missing = [c for c in required if c not in df.columns]
     if missing:
         raise ValueError(
             f"Feature table missing required columns: {missing}"
         )
 
+    df = _add_last6_std(df)
+
     numeric_features = _select_features(df, config)
 
-    if not numeric_features:
-        raise ValueError("No minutes features selected.")
-
-    print("=== MINUTES MODEL TEST ===")
+    print("=== HYBRID MINUTES MODEL TEST ===")
     print(f"Rows: {len(df):,}")
-    print(f"Numeric rolling features: {len(numeric_features):,}")
+    print(f"Rolling model features: {len(numeric_features):,}")
     print(f"Baseline: {baseline_feature}")
+    print(f"Stable std threshold: <= {stable_threshold:.2f}")
     print(f"Test seasons: {config['test_seasons']}")
 
     all_predictions = []
     summary_rows = []
-    bucket_rows = []
+    split_rows = []
     importance_rows = []
 
     for test_season in config["test_seasons"]:
         train = df[df["season"] < test_season].copy()
         test = df[df["season"] == test_season].copy()
 
-        # Target must exist.
         train = train[train[target].notna()].copy()
-        test = test[test[target].notna()].copy()
 
-        # Baseline comparison needs l6 available.
-        test_eval = test[test[baseline_feature].notna()].copy()
+        # LightGBM is only trained on historically volatile rows.
+        volatile_train = train[
+            train["player_minutes_std_l6"].isna()
+            | (train["player_minutes_std_l6"] > stable_threshold)
+        ].copy()
 
-        if train.empty or test_eval.empty:
+        test_eval = test[
+            test[target].notna()
+            & test[baseline_feature].notna()
+        ].copy()
+
+        if volatile_train.empty or test_eval.empty:
             print(
                 f"{test_season}: skipped "
-                f"(train={len(train):,}, test={len(test_eval):,})"
+                f"(volatile train={len(volatile_train):,}, "
+                f"test={len(test_eval):,})"
             )
             continue
 
         X_train = _encode_inputs(
-            train, numeric_features, config
+            volatile_train, numeric_features, config
         )
+        y_train = volatile_train[target].astype(float)
+
         X_test = _encode_inputs(
             test_eval, numeric_features, config
         )
-
-        # Ensure identical columns/order.
         X_test = X_test.reindex(
             columns=X_train.columns,
             fill_value=0,
         )
 
-        y_train = train[target].astype(float)
-        y_test = test_eval[target].astype(float)
+        lgbm_model = LGBMRegressor(
+            **config["lightgbm"]
+        )
+        lgbm_model.fit(X_train, y_train)
+
+        lgbm_pred = np.clip(
+            lgbm_model.predict(X_test),
+            0,
+            90,
+        )
 
         baseline_pred = (
             test_eval[baseline_feature]
@@ -184,51 +330,19 @@ def run_minutes_model_test(
             .to_numpy()
         )
 
-        # HistGradientBoosting cannot accept +/- inf.
-        X_train_hgb = X_train.replace(
-            [np.inf, -np.inf], np.nan
-        )
-        X_test_hgb = X_test.replace(
-            [np.inf, -np.inf], np.nan
-        )
-
-        hist_model = HistGradientBoostingRegressor(
-            **config["hist_gradient_boosting"]
-        )
-        hist_model.fit(X_train_hgb, y_train)
-        hist_pred = np.clip(
-            hist_model.predict(X_test_hgb),
-            0,
-            90,
-        )
-
-        lgbm_model = LGBMRegressor(
-            **config["lightgbm"]
-        )
-        lgbm_model.fit(X_train, y_train)
-        lgbm_pred = np.clip(
-            lgbm_model.predict(X_test),
-            0,
-            90,
-        )
-
-        model_predictions = {
-            "avg_mins_l6": baseline_pred,
-            "hist_gradient_boosting": hist_pred,
-            "lightgbm": lgbm_pred,
-        }
-
-        for model_name, pred in model_predictions.items():
-            m = _metrics(y_test, pred)
-
-            summary_rows.append(
-                {
-                    "test_season": test_season,
-                    "model": model_name,
-                    "rows": len(y_test),
-                    **m,
-                }
+        stable_mask = (
+            test_eval["player_minutes_std_l6"].notna()
+            & (
+                test_eval["player_minutes_std_l6"]
+                <= stable_threshold
             )
+        ).to_numpy()
+
+        hybrid_pred = np.where(
+            stable_mask,
+            baseline_pred,
+            lgbm_pred,
+        )
 
         pred_frame = test_eval[
             [
@@ -239,54 +353,80 @@ def run_minutes_model_test(
                 "player_name",
                 "position",
                 target,
+                baseline_feature,
+                "player_minutes_std_l6",
             ]
         ].copy()
 
         pred_frame = pred_frame.rename(
             columns={target: "actual_minutes"}
         )
+
         pred_frame["pred_avg_mins_l6"] = baseline_pred
-        pred_frame["pred_hist_gradient_boosting"] = hist_pred
         pred_frame["pred_lightgbm"] = lgbm_pred
+        pred_frame["stable_last6"] = stable_mask
+        pred_frame["prediction_source"] = np.where(
+            stable_mask,
+            "avg_mins_l6",
+            "lightgbm",
+        )
+        pred_frame["hybrid_predicted_minutes"] = hybrid_pred
+        pred_frame["final_predicted_minutes"] = hybrid_pred
 
-        all_predictions.append(pred_frame)
+        pred_frame = _apply_manual_overrides(
+            pred_frame, config
+        )
 
-        # Error diagnostics by actual minutes bucket.
+        model_predictions = {
+            "avg_mins_l6": baseline_pred,
+            "lightgbm_all_test_rows": lgbm_pred,
+            "hybrid": hybrid_pred,
+            "final_with_manual_overrides": pred_frame[
+                "final_predicted_minutes"
+            ].to_numpy(),
+        }
+
         for model_name, pred in model_predictions.items():
-            tmp = pred_frame[
-                [
-                    "actual_minutes",
-                    "position",
-                ]
-            ].copy()
-            tmp["prediction"] = pred
-            tmp["minutes_bucket"] = tmp[
-                "actual_minutes"
-            ].apply(_minutes_bucket)
-            tmp["abs_error"] = (
-                tmp["actual_minutes"]
-                - tmp["prediction"]
-            ).abs()
-
-            grouped = (
-                tmp
-                .groupby(
-                    ["minutes_bucket"],
-                    as_index=False,
-                    observed=True,
-                )
-                .agg(
-                    rows=("actual_minutes", "size"),
-                    actual_avg=("actual_minutes", "mean"),
-                    predicted_avg=("prediction", "mean"),
-                    mae=("abs_error", "mean"),
-                )
+            m = _metrics(
+                pred_frame["actual_minutes"],
+                pred,
             )
-            grouped["test_season"] = test_season
-            grouped["model"] = model_name
-            bucket_rows.append(grouped)
 
-        # LightGBM feature importance only.
+            summary_rows.append(
+                {
+                    "test_season": test_season,
+                    "model": model_name,
+                    "rows": len(pred_frame),
+                    **m,
+                }
+            )
+
+        split_summary = (
+            pred_frame
+            .assign(
+                abs_error=lambda x: (
+                    x["actual_minutes"]
+                    - x["hybrid_predicted_minutes"]
+                ).abs()
+            )
+            .groupby(
+                ["prediction_source"],
+                as_index=False,
+            )
+            .agg(
+                rows=("player_code", "size"),
+                actual_avg=("actual_minutes", "mean"),
+                predicted_avg=(
+                    "hybrid_predicted_minutes", "mean"
+                ),
+                mae=("abs_error", "mean"),
+                avg_std_l6=("player_minutes_std_l6", "mean"),
+            )
+        )
+
+        split_summary["test_season"] = test_season
+        split_rows.append(split_summary)
+
         importance = pd.DataFrame(
             {
                 "feature": X_train.columns,
@@ -299,6 +439,8 @@ def run_minutes_model_test(
         )
         importance_rows.append(importance)
 
+        all_predictions.append(pred_frame)
+
         print(f"\n--- {test_season} ---")
         season_results = pd.DataFrame(
             [
@@ -306,11 +448,15 @@ def run_minutes_model_test(
                 if r["test_season"] == test_season
             ]
         ).sort_values("mae")
+
         print(
             season_results[
                 ["model", "mae", "rmse", "rows"]
             ].to_string(index=False)
         )
+
+        print("\nPrediction source split:")
+        print(split_summary.to_string(index=False))
 
     summary = pd.DataFrame(summary_rows)
     predictions = (
@@ -318,9 +464,9 @@ def run_minutes_model_test(
         if all_predictions
         else pd.DataFrame()
     )
-    buckets = (
-        pd.concat(bucket_rows, ignore_index=True)
-        if bucket_rows
+    split_summary = (
+        pd.concat(split_rows, ignore_index=True)
+        if split_rows
         else pd.DataFrame()
     )
     importance = (
@@ -333,23 +479,24 @@ def run_minutes_model_test(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     summary.to_csv(
-        output_dir / "minutes_model_summary.csv",
+        output_dir / "minutes_hybrid_summary.csv",
         index=False,
     )
     predictions.to_csv(
-        output_dir / "minutes_model_predictions.csv",
+        output_dir / "minutes_hybrid_predictions.csv",
         index=False,
     )
-    buckets.to_csv(
-        output_dir / "minutes_model_buckets.csv",
+    split_summary.to_csv(
+        output_dir / "minutes_hybrid_source_split.csv",
         index=False,
     )
     importance.to_csv(
-        output_dir / "minutes_model_lightgbm_importance.csv",
+        output_dir / "minutes_hybrid_lightgbm_importance.csv",
         index=False,
     )
 
     print("\n=== OVERALL ===")
+
     if not summary.empty:
         overall = (
             summary
@@ -367,7 +514,7 @@ def run_minutes_model_test(
     return {
         "summary": summary,
         "predictions": predictions,
-        "buckets": buckets,
+        "source_split": split_summary,
         "importance": importance,
         "numeric_features": numeric_features,
     }
