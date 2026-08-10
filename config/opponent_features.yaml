@@ -1,0 +1,21 @@
+input_path: data/processed/fct_gw_historic.csv
+output_path: data/features/fct_opponent_position_features_historic.csv
+
+meaningful_minutes: 45
+
+rolling_windows:
+  - 1
+  - 3
+  - 6
+  - 12
+  - 38
+  - 76
+  - 114
+
+position_groups:
+  GK: GK
+  DEF: DEF
+  MID: ATT
+  FWD: ATT
+
+points_column: core_total_points
