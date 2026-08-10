@@ -2,324 +2,369 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import yaml
 
 
 INPUT_PATH = Path("data/processed/fct_gw_historic.csv")
 OUTPUT_PATH = Path("data/features/fct_gw_features_historic.csv")
+CONFIG_PATH = Path("config/player_features.yaml")
 
 
-PLAYER_FEATURE_WINDOWS = [3, 5]
+IDENTIFIER_COLUMNS = [
+    "season",
+    "gameweek",
+    "fixture_id",
+    "kickoff_time",
+    "player_code",
+    "player_name",
+    "web_name",
+    "position",
+    "team_id",
+    "team_name",
+    "opponent_team_id",
+    "opponent_team_name",
+    "was_home",
+    "price",
+]
 
 
-def _safe_divide(num: pd.Series, den: pd.Series) -> pd.Series:
-    den = den.replace(0, np.nan)
-    return num / den
+def _load_config(config_path: str | Path) -> dict:
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
 
 
-def _add_player_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
+def _add_global_match_index(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Add player-level historical features using only information available
-    before the current fixture.
+    Create a chronological league-fixture index across all historic seasons.
 
-    Important:
-    - All rolling metrics are shifted by 1 fixture.
-    - Grain remains player x fixture.
+    This is metadata/debugging only and should not be used as a model feature.
     """
     out = df.copy()
-
-    out = out.sort_values(
-        ["player_code", "kickoff_time", "season", "gameweek", "fixture_id"]
-    ).reset_index(drop=True)
-
-    # ---------------------------------------------------------
-    # Per-match helper metrics used only to generate lagged features
-    # ---------------------------------------------------------
-    # Use the explicit FPL starts field where available.
-    # For older rows/seasons where it is unavailable, use 60+ minutes
-    # as a practical historical proxy for a start.
-    minutes_numeric = pd.to_numeric(out["minutes"], errors="coerce")
-
-    if "starts" in out.columns:
-        starts_raw = pd.to_numeric(out["starts"], errors="coerce")
-        out["_started"] = np.where(
-            starts_raw.notna(),
-            (starts_raw == 1).astype(float),
-            (minutes_numeric >= 60).astype(float),
-        )
-    else:
-        out["_started"] = (minutes_numeric >= 60).astype(float)
-
-    out["_played"] = (
-        pd.to_numeric(out["minutes"], errors="coerce") > 0
-    ).astype(float)
-
-    out["_meaningful_45"] = (
-        pd.to_numeric(out["minutes"], errors="coerce") >= 45
-    ).astype(float)
-
-    out["_fullish_80"] = (
-        pd.to_numeric(out["minutes"], errors="coerce") >= 80
-    ).astype(float)
-
-    out["_zero_minutes"] = (
-        pd.to_numeric(out["minutes"], errors="coerce") == 0
-    ).astype(float)
-
-    # Per-90 helper measures. Only define where minutes > 0.
-    minutes = pd.to_numeric(out["minutes"], errors="coerce")
-
-    per90_sources = {
-        "core_points": "core_total_points",
-        "goals": "goals_scored",
-        "assists": "assists",
-        "bps": "bps",
-        "influence": "influence",
-        "creativity": "creativity",
-        "threat": "threat",
-        "ict": "ict_index",
-        "xg": "expected_goals",
-        "xa": "expected_assists",
-        "xgi": "expected_goal_involvements",
-        "xgc": "expected_goals_conceded",
-    }
-
-    for short_name, source_col in per90_sources.items():
-        if source_col in out.columns:
-            values = pd.to_numeric(out[source_col], errors="coerce")
-            out[f"_{short_name}_per90"] = np.where(
-                minutes > 0,
-                values * 90.0 / minutes,
-                np.nan,
-            )
-
-    # ---------------------------------------------------------
-    # Lag-1 raw features
-    # ---------------------------------------------------------
-    lag_columns = [
-        "minutes",
-        "total_points",
-        "core_total_points",
-        "goals_scored",
-        "assists",
-        "clean_sheets",
-        "goals_conceded",
-        "bonus",
-        "bps",
-        "influence",
-        "creativity",
-        "threat",
-        "ict_index",
-        "expected_goals",
-        "expected_assists",
-        "expected_goal_involvements",
-        "expected_goals_conceded",
-        "defensive_contribution",
-    ]
-
-    player_group = out.groupby("player_code", sort=False)
-
-    for col in lag_columns:
-        if col in out.columns:
-            out[f"player_{col}_lag1"] = player_group[col].shift(1)
-
-    # ---------------------------------------------------------
-    # Rolling player form
-    # ---------------------------------------------------------
-    rolling_sources = {
-        "minutes": "minutes",
-        "total_points": "total_points",
-        "core_points": "core_total_points",
-        "goals": "goals_scored",
-        "assists": "assists",
-        "clean_sheets": "clean_sheets",
-        "goals_conceded": "goals_conceded",
-        "bonus": "bonus",
-        "bps": "bps",
-        "influence": "influence",
-        "creativity": "creativity",
-        "threat": "threat",
-        "ict": "ict_index",
-        "xg": "expected_goals",
-        "xa": "expected_assists",
-        "xgi": "expected_goal_involvements",
-        "xgc": "expected_goals_conceded",
-        "played": "_played",
-        "started": "_started",
-        "meaningful_45": "_meaningful_45",
-        "fullish_80": "_fullish_80",
-        "zero_minutes": "_zero_minutes",
-    }
-
-    for window in PLAYER_FEATURE_WINDOWS:
-        for feature_name, source_col in rolling_sources.items():
-            if source_col not in out.columns:
-                continue
-
-            shifted = player_group[source_col].shift(1)
-
-            out[f"player_{feature_name}_avg_l{window}"] = (
-                shifted.groupby(out["player_code"])
-                .rolling(window=window, min_periods=1)
-                .mean()
-                .reset_index(level=0, drop=True)
-            )
-
-        # Sums are especially useful for goals/assists/xG.
-        for feature_name, source_col in {
-            "goals": "goals_scored",
-            "assists": "assists",
-            "xg": "expected_goals",
-            "xa": "expected_assists",
-            "xgi": "expected_goal_involvements",
-        }.items():
-            if source_col not in out.columns:
-                continue
-
-            shifted = player_group[source_col].shift(1)
-
-            out[f"player_{feature_name}_sum_l{window}"] = (
-                shifted.groupby(out["player_code"])
-                .rolling(window=window, min_periods=1)
-                .sum()
-                .reset_index(level=0, drop=True)
-            )
-
-        # Per-90 rolling metrics.
-        for short_name in [
-            "core_points",
-            "goals",
-            "assists",
-            "bps",
-            "influence",
-            "creativity",
-            "threat",
-            "ict",
-            "xg",
-            "xa",
-            "xgi",
-            "xgc",
-        ]:
-            helper = f"_{short_name}_per90"
-            if helper not in out.columns:
-                continue
-
-            shifted = player_group[helper].shift(1)
-
-            out[f"player_{short_name}_per90_avg_l{window}"] = (
-                shifted.groupby(out["player_code"])
-                .rolling(window=window, min_periods=1)
-                .mean()
-                .reset_index(level=0, drop=True)
-            )
-
-    # ---------------------------------------------------------
-    # Season-to-date player metrics, all shifted
-    # ---------------------------------------------------------
-    season_player_group = out.groupby(["season", "player_code"], sort=False)
-
-    season_sources = {
-        "minutes": "minutes",
-        "total_points": "total_points",
-        "core_points": "core_total_points",
-        "goals": "goals_scored",
-        "assists": "assists",
-        "bonus": "bonus",
-        "bps": "bps",
-        "xg": "expected_goals",
-        "xa": "expected_assists",
-        "xgi": "expected_goal_involvements",
-        "played": "_played",
-        "started": "_started",
-    }
-
-    for feature_name, source_col in season_sources.items():
-        if source_col not in out.columns:
-            continue
-
-        shifted = season_player_group[source_col].shift(1)
-
-        out[f"player_{feature_name}_season_avg"] = (
-            shifted.groupby([out["season"], out["player_code"]])
-            .expanding(min_periods=1)
-            .mean()
-            .reset_index(level=[0, 1], drop=True)
-        )
-
-    # Better season-to-date per-90s using cumulative sums / cumulative minutes.
-    # This avoids averaging match-level per-90 values.
-    season_metric_sources = {
-        "core_points": "core_total_points",
-        "goals": "goals_scored",
-        "assists": "assists",
-        "bps": "bps",
-        "xg": "expected_goals",
-        "xa": "expected_assists",
-        "xgi": "expected_goal_involvements",
-    }
-
-    shifted_minutes = season_player_group["minutes"].shift(1)
-    cum_minutes = (
-        shifted_minutes.fillna(0)
-        .groupby([out["season"], out["player_code"]])
-        .cumsum()
+    out["kickoff_time"] = pd.to_datetime(
+        out["kickoff_time"], utc=True, errors="coerce"
     )
 
-    out["player_minutes_season_total"] = cum_minutes
+    fixtures = (
+        out[
+            ["season", "fixture_id", "kickoff_time"]
+        ]
+        .drop_duplicates()
+        .sort_values(
+            ["kickoff_time", "season", "fixture_id"],
+            na_position="last",
+        )
+        .reset_index(drop=True)
+    )
 
-    for feature_name, source_col in season_metric_sources.items():
-        if source_col not in out.columns:
+    fixtures["match_index"] = np.arange(1, len(fixtures) + 1)
+
+    out = out.merge(
+        fixtures[
+            ["season", "fixture_id", "match_index"]
+        ],
+        on=["season", "fixture_id"],
+        how="left",
+        validate="many_to_one",
+    )
+
+    return out
+
+
+def _rolling_mean(
+    shifted: pd.Series,
+    groups: pd.Series,
+    window: int,
+) -> pd.Series:
+    return (
+        shifted
+        .groupby(groups)
+        .rolling(window=window, min_periods=1)
+        .mean()
+        .reset_index(level=0, drop=True)
+    )
+
+
+def _rolling_sum(
+    shifted: pd.Series,
+    groups: pd.Series,
+    window: int,
+) -> pd.Series:
+    return (
+        shifted
+        .groupby(groups)
+        .rolling(window=window, min_periods=1)
+        .sum()
+        .reset_index(level=0, drop=True)
+    )
+
+
+def _rolling_meaningful_rate(
+    shifted_minutes: pd.Series,
+    groups: pd.Series,
+    window: int,
+    threshold: float,
+) -> pd.Series:
+    meaningful = shifted_minutes.ge(threshold).astype(float)
+    meaningful[shifted_minutes.isna()] = np.nan
+
+    return (
+        meaningful
+        .groupby(groups)
+        .rolling(window=window, min_periods=1)
+        .mean()
+        .reset_index(level=0, drop=True)
+    )
+
+
+def _rolling_meaningful_minutes_mean(
+    shifted_minutes: pd.Series,
+    groups: pd.Series,
+    window: int,
+    threshold: float,
+) -> pd.Series:
+    meaningful_minutes = shifted_minutes.where(
+        shifted_minutes >= threshold
+    )
+
+    return (
+        meaningful_minutes
+        .groupby(groups)
+        .rolling(window=window, min_periods=1)
+        .mean()
+        .reset_index(level=0, drop=True)
+    )
+
+
+def _rolling_per90(
+    shifted_metric: pd.Series,
+    shifted_minutes: pd.Series,
+    groups: pd.Series,
+    window: int,
+) -> pd.Series:
+    """
+    Ratio-of-sums per90:
+        sum(metric over prior N fixtures)
+        / sum(minutes over prior N fixtures) * 90
+
+    This deliberately avoids averaging individual-match per90 values.
+    """
+    metric_sum = _rolling_sum(
+        shifted_metric.fillna(0),
+        groups,
+        window,
+    )
+    minutes_sum = _rolling_sum(
+        shifted_minutes.fillna(0),
+        groups,
+        window,
+    )
+
+    return np.where(
+        minutes_sum > 0,
+        metric_sum * 90.0 / minutes_sum,
+        np.nan,
+    )
+
+
+def _add_explicit_lags(
+    out: pd.DataFrame,
+    config: dict,
+) -> pd.DataFrame:
+    """
+    Add explicit lag-1 features only for categories listed in lag_categories.
+
+    These are separate from rolling windows. For example:
+      player_minutes_lag1
+      player_core_points_lag1
+      player_core_pp90_lag1
+    """
+    lag_categories = set(config.get("lag_categories", []))
+    categories = config.get("categories", {})
+
+    player_group = out.groupby("player_code", sort=False)
+    shifted_minutes = player_group["minutes"].shift(1)
+
+    used_names = set()
+
+    for category_name in lag_categories:
+        metrics = categories.get(category_name, {})
+
+        for metric_name, spec in metrics.items():
+            source = spec["source"]
+            aggregation = spec["aggregation"]
+
+            if source not in out.columns:
+                continue
+
+            feature_name = metric_name
+
+            # Cleaner naming for the raw minutes lag.
+            if metric_name == "avg_mins":
+                feature_name = "minutes"
+
+            if feature_name in used_names:
+                continue
+
+            if aggregation == "per90":
+                shifted_metric = player_group[source].shift(1)
+
+                lag = np.where(
+                    shifted_minutes > 0,
+                    pd.to_numeric(
+                        shifted_metric, errors="coerce"
+                    ) * 90.0 / pd.to_numeric(
+                        shifted_minutes, errors="coerce"
+                    ),
+                    np.nan,
+                )
+
+            elif aggregation == "meaningful_rate":
+                threshold = spec.get("meaningful_threshold", 45)
+
+                lag = np.where(
+                    shifted_minutes.notna(),
+                    (shifted_minutes >= threshold).astype(float),
+                    np.nan,
+                )
+
+            elif aggregation == "meaningful_minutes_mean":
+                threshold = spec.get("meaningful_threshold", 45)
+
+                lag = shifted_minutes.where(
+                    shifted_minutes >= threshold
+                )
+
+            else:
+                lag = player_group[source].shift(1)
+
+            out[f"player_{feature_name}_lag1"] = lag
+            used_names.add(feature_name)
+
+    return out
+
+
+def _add_configured_rolling_features(
+    out: pd.DataFrame,
+    config: dict,
+) -> pd.DataFrame:
+    """
+    Build all configured rolling features continuously across season boundaries.
+
+    Each current row sees only PRIOR player fixtures because every source
+    series is shifted by 1 before rolling.
+    """
+    windows = config["rolling_windows"]
+    categories = config["categories"]
+
+    player_group = out.groupby("player_code", sort=False)
+    groups = out["player_code"]
+
+    shifted_minutes = pd.to_numeric(
+        player_group["minutes"].shift(1),
+        errors="coerce",
+    )
+
+    for category_name, metrics in categories.items():
+        # EXTERNAL can remain empty until a future data source is added.
+        if not metrics:
             continue
 
-        shifted_metric = season_player_group[source_col].shift(1)
-        cum_metric = (
-            shifted_metric.fillna(0)
-            .groupby([out["season"], out["player_code"]])
-            .cumsum()
-        )
+        for metric_name, spec in metrics.items():
+            source = spec["source"]
+            aggregation = spec["aggregation"]
 
-        out[f"player_{feature_name}_season_total"] = cum_metric
-        out[f"player_{feature_name}_per90_season"] = _safe_divide(
-            cum_metric * 90.0,
-            cum_minutes,
-        )
+            if source not in out.columns:
+                # Historic availability differs by season/source.
+                # Missing columns are ignored at build time.
+                continue
 
-    # ---------------------------------------------------------
-    # Appearance / availability-style indicators
-    # ---------------------------------------------------------
-    # Number of prior fixtures seen in current season.
-    out["player_prior_fixtures_season"] = season_player_group.cumcount()
+            shifted_source = pd.to_numeric(
+                player_group[source].shift(1),
+                errors="coerce",
+            )
 
-    # Days since previous fixture for this player.
-    kickoff = pd.to_datetime(out["kickoff_time"], utc=True, errors="coerce")
-    prev_kickoff = player_group["kickoff_time"].shift(1)
-    prev_kickoff = pd.to_datetime(prev_kickoff, utc=True, errors="coerce")
+            for window in windows:
+                col = f"player_{metric_name}_l{window}"
 
-    out["player_days_since_last_fixture"] = (
-        kickoff - prev_kickoff
-    ).dt.total_seconds() / 86400.0
+                if aggregation == "mean":
+                    out[col] = _rolling_mean(
+                        shifted_source,
+                        groups,
+                        window,
+                    )
 
-    # ---------------------------------------------------------
-    # Targets
-    # ---------------------------------------------------------
-    out["target_minutes"] = pd.to_numeric(out["minutes"], errors="coerce")
-    out["target_total_points"] = pd.to_numeric(out["total_points"], errors="coerce")
-    out["target_core_points"] = pd.to_numeric(out["core_total_points"], errors="coerce")
+                elif aggregation == "sum":
+                    out[col] = _rolling_sum(
+                        shifted_source.fillna(0),
+                        groups,
+                        window,
+                    )
+
+                elif aggregation == "per90":
+                    out[col] = _rolling_per90(
+                        shifted_source,
+                        shifted_minutes,
+                        groups,
+                        window,
+                    )
+
+                elif aggregation == "meaningful_rate":
+                    threshold = spec.get(
+                        "meaningful_threshold", 45
+                    )
+                    out[col] = _rolling_meaningful_rate(
+                        shifted_minutes,
+                        groups,
+                        window,
+                        threshold,
+                    )
+
+                elif aggregation == "meaningful_minutes_mean":
+                    threshold = spec.get(
+                        "meaningful_threshold", 45
+                    )
+                    out[col] = _rolling_meaningful_minutes_mean(
+                        shifted_minutes,
+                        groups,
+                        window,
+                        threshold,
+                    )
+
+                else:
+                    raise ValueError(
+                        f"Unsupported aggregation '{aggregation}' "
+                        f"for metric '{metric_name}'"
+                    )
+
+    return out
+
+
+def _add_targets(out: pd.DataFrame) -> pd.DataFrame:
+    """Add modelling targets. Targets are never used as current-row features."""
+    out["target_minutes"] = pd.to_numeric(
+        out["minutes"], errors="coerce"
+    )
+    out["target_total_points"] = pd.to_numeric(
+        out["total_points"], errors="coerce"
+    )
+    out["target_core_points"] = pd.to_numeric(
+        out["core_total_points"], errors="coerce"
+    )
 
     out["target_core_pp90"] = np.where(
-        out["minutes"] >= 45,
-        out["core_total_points"] * 90.0 / out["minutes"],
+        pd.to_numeric(out["minutes"], errors="coerce") >= 45,
+        pd.to_numeric(
+            out["core_total_points"], errors="coerce"
+        )
+        * 90.0
+        / pd.to_numeric(out["minutes"], errors="coerce"),
         np.nan,
     )
 
     out["target_defcon_hit"] = pd.to_numeric(
-        out["defcon_hit"], errors="coerce"
+        out.get("defcon_hit"),
+        errors="coerce",
     )
-
-    # ---------------------------------------------------------
-    # Remove private helper columns
-    # ---------------------------------------------------------
-    helper_cols = [c for c in out.columns if c.startswith("_")]
-    out = out.drop(columns=helper_cols)
 
     return out
 
@@ -327,18 +372,23 @@ def _add_player_rolling_features(df: pd.DataFrame) -> pd.DataFrame:
 def build_historic_features(
     input_path: str | Path = INPUT_PATH,
     output_path: str | Path = OUTPUT_PATH,
+    config_path: str | Path = CONFIG_PATH,
     save: bool = True,
 ) -> pd.DataFrame:
     """
-    Build the first historic feature layer.
+    Build historic player features.
 
-    Scope of V1:
-    - Player history only
-    - No team strength features yet
-    - No opponent strength features yet
-    - No opponent-position PPG yet
+    Design:
+    - Continuous history across season boundaries.
+    - Rolling windows controlled in config/player_features.yaml.
+    - Metric categories controlled in config.
+    - Explicit lag-1 features controlled via lag_categories.
+    - No season-to-date aggregates.
+    - No player_history_matches model feature.
+    - match_index retained as metadata/debugging only.
     """
     input_path = Path(input_path)
+    config = _load_config(config_path)
 
     df = pd.read_csv(input_path, low_memory=False)
 
@@ -348,6 +398,7 @@ def build_historic_features(
         "fixture_id",
         "kickoff_time",
         "player_code",
+        "player_name",
         "position",
         "minutes",
         "total_points",
@@ -360,10 +411,36 @@ def build_historic_features(
             f"Historic fact table missing required columns: {missing}"
         )
 
-    out = _add_player_rolling_features(df)
+    df["kickoff_time"] = pd.to_datetime(
+        df["kickoff_time"], utc=True, errors="coerce"
+    )
 
-    # Preserve the original grain.
-    grain = ["season", "gameweek", "player_code", "fixture_id"]
+    out = _add_global_match_index(df)
+
+    # Continuous player chronology. Season is deliberately NOT a grouping key.
+    out = out.sort_values(
+        [
+            "player_code",
+            "kickoff_time",
+            "season",
+            "gameweek",
+            "fixture_id",
+        ],
+        na_position="last",
+    ).reset_index(drop=True)
+
+    out = _add_explicit_lags(out, config)
+    out = _add_configured_rolling_features(out, config)
+    out = _add_targets(out)
+
+    # Preserve original player-fixture grain.
+    grain = [
+        "season",
+        "gameweek",
+        "player_code",
+        "fixture_id",
+    ]
+
     dupes = out.duplicated(grain, keep=False)
 
     if dupes.any():
@@ -373,26 +450,65 @@ def build_historic_features(
             f"{sample.to_string(index=False)}"
         )
 
+    # Put identifiers/metadata first for easier human inspection.
+    front = [
+        c for c in IDENTIFIER_COLUMNS + ["match_index"]
+        if c in out.columns
+    ]
+
+    target_cols = [
+        c for c in out.columns if c.startswith("target_")
+    ]
+
+    feature_cols = [
+        c for c in out.columns
+        if c.startswith("player_")
+        and c not in {"player_code", "player_name"}
+    ]
+
+    raw_fact_cols = [
+        c for c in out.columns
+        if c not in front
+        and c not in feature_cols
+        and c not in target_cols
+    ]
+
+    out = out[
+        front
+        + feature_cols
+        + raw_fact_cols
+        + target_cols
+    ]
+
     if save:
         output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.parent.mkdir(
+            parents=True, exist_ok=True
+        )
         out.to_csv(output_path, index=False)
-
-        feature_cols = [
-            c for c in out.columns
-            if c.startswith("player_")
-        ]
-
-        target_cols = [
-            c for c in out.columns
-            if c.startswith("target_")
-        ]
 
         print(f"Saved: {output_path}")
         print(f"Rows: {len(out):,}")
-        print(f"Players: {out['player_code'].nunique():,}")
-        print(f"Player feature columns: {len(feature_cols):,}")
-        print(f"Target columns: {len(target_cols):,}")
+        print(
+            f"Players: "
+            f"{out['player_code'].nunique():,}"
+        )
+        print(
+            f"Configured rolling windows: "
+            f"{config['rolling_windows']}"
+        )
+        print(
+            f"Lag categories: "
+            f"{config.get('lag_categories', [])}"
+        )
+        print(
+            f"Player feature columns: "
+            f"{len(feature_cols):,}"
+        )
+        print(
+            f"Target columns: "
+            f"{len(target_cols):,}"
+        )
 
     return out
 
