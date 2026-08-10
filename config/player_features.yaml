@@ -109,3 +109,21 @@ categories:
 
   # Reserved for future bookmaker / injury / odds / ownership / other feeds.
   EXTERNAL: {}
+
+
+  CONTEXT:
+    kickoff_day_of_week:
+      source: kickoff_time
+      aggregation: derived
+
+    kickoff_hour:
+      source: kickoff_time
+      aggregation: derived
+
+    kickoff_day_type:
+      source: kickoff_time
+      aggregation: derived
+
+    kickoff_time_type:
+      source: kickoff_time
+      aggregation: derived
