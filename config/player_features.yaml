@@ -1,0 +1,111 @@
+# Historic feature engineering configuration
+
+rolling_windows:
+  - 1
+  - 3
+  - 6
+  - 12
+  - 38
+  - 76
+  - 114
+
+# Categories that should also receive an explicit lag-1 feature.
+# Add FORM / UNDERLYING / EXTERNAL here later if wanted.
+lag_categories:
+  - MINUTES
+  - PERFORMANCE
+
+categories:
+
+  MINUTES:
+    avg_mins:
+      source: minutes
+      aggregation: mean
+
+    avg_meaningful:
+      source: minutes
+      aggregation: meaningful_rate
+      meaningful_threshold: 45
+
+    avg_meaningful_mins:
+      source: minutes
+      aggregation: meaningful_minutes_mean
+      meaningful_threshold: 45
+
+  PERFORMANCE:
+    core_points:
+      source: core_total_points
+      aggregation: mean
+
+    core_pp90:
+      source: core_total_points
+      aggregation: per90
+
+    bps:
+      source: bps
+      aggregation: mean
+
+    bps90:
+      source: bps
+      aggregation: per90
+
+  FORM:
+    goals:
+      source: goals_scored
+      aggregation: sum
+
+    assists:
+      source: assists
+      aggregation: sum
+
+    bonus:
+      source: bonus
+      aggregation: mean
+
+  UNDERLYING:
+    xg:
+      source: expected_goals
+      aggregation: sum
+
+    xa:
+      source: expected_assists
+      aggregation: sum
+
+    xgi:
+      source: expected_goal_involvements
+      aggregation: sum
+
+    xg90:
+      source: expected_goals
+      aggregation: per90
+
+    xa90:
+      source: expected_assists
+      aggregation: per90
+
+    xgi90:
+      source: expected_goal_involvements
+      aggregation: per90
+
+    xgc90:
+      source: expected_goals_conceded
+      aggregation: per90
+
+    influence:
+      source: influence
+      aggregation: mean
+
+    creativity:
+      source: creativity
+      aggregation: mean
+
+    threat:
+      source: threat
+      aggregation: mean
+
+    ict:
+      source: ict_index
+      aggregation: mean
+
+  # Reserved for future bookmaker / injury / odds / ownership / other feeds.
+  EXTERNAL: {}
