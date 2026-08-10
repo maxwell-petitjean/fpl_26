@@ -1,0 +1,26 @@
+input_path: data/processed/fct_gw_historic.csv
+output_dir: data/outputs/defcon_model
+
+season: "2025-26"
+train_max_gameweek: 30
+test_min_gameweek: 31
+
+rolling_windows:
+  - 1
+  - 3
+  - 6
+  - 12
+
+meaningful_minutes: 45
+
+lightgbm:
+  n_estimators: 400
+  learning_rate: 0.03
+  num_leaves: 15
+  max_depth: -1
+  min_child_samples: 40
+  subsample: 0.85
+  colsample_bytree: 0.85
+  reg_lambda: 1.0
+  random_state: 42
+  verbosity: -1
