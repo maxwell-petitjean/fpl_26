@@ -5,6 +5,10 @@ test_seasons:
   - "2024-25"
   - "2025-26"
 
+# If the standard deviation of a player's prior 6 fixture minutes is
+# <= this threshold, use avg_mins_l6 directly instead of LightGBM.
+stable_std_threshold: 5.0
+
 use_position: true
 use_context: false
 use_chance_of_playing: true
@@ -20,6 +24,8 @@ context_features:
 
 chance_of_playing_feature: chance_of_playing_next_round
 
+manual_override_path: data/manual/minutes_overrides.csv
+
 lightgbm:
   n_estimators: 500
   learning_rate: 0.03
@@ -31,10 +37,3 @@ lightgbm:
   random_state: 42
   n_jobs: -1
   verbosity: -1
-
-hist_gradient_boosting:
-  learning_rate: 0.05
-  max_iter: 300
-  max_leaf_nodes: 31
-  l2_regularization: 1.0
-  random_state: 42
