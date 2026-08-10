@@ -258,7 +258,12 @@ def _add_explicit_lags(
         for metric_name, spec in metrics.items():
             source = spec["source"]
             aggregation = spec["aggregation"]
-
+        
+            # Derived/context features are current-fixture features
+            # and should not be rolled.
+            if aggregation == "derived":
+                continue
+        
             if source not in out.columns:
                 continue
 
