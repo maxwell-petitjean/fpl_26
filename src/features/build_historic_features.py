@@ -15,6 +15,10 @@ IDENTIFIER_COLUMNS = [
     "gameweek",
     "fixture_id",
     "kickoff_time",
+    "kickoff_day_of_week",
+    "kickoff_hour",
+    "kickoff_day_type",
+    "kickoff_time_type",
     "player_code",
     "player_name",
     "web_name",
@@ -477,7 +481,8 @@ def build_historic_features(
         df["kickoff_time"], utc=True, errors="coerce"
     )
 
-    out = _add_global_match_index(df)
+    out = _add_kickoff_context(df)
+    out = _add_global_match_index(out)
 
     # Continuous player chronology. Season is deliberately NOT a grouping key.
     out = out.sort_values(
