@@ -343,12 +343,15 @@ def _add_configured_rolling_features(
         for metric_name, spec in metrics.items():
             source = spec["source"]
             aggregation = spec["aggregation"]
-
-            if source not in out.columns:
-                # Historic availability differs by season/source.
-                # Missing columns are ignored at build time.
+        
+            # Derived/context features are current-fixture features
+            # and should not be rolled.
+            if aggregation == "derived":
                 continue
-
+        
+            if source not in out.columns:
+                continue
+            
             shifted_source = pd.to_numeric(
                 player_group[source].shift(1),
                 errors="coerce",
