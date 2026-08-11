@@ -1,0 +1,19 @@
+xpp_predictions_path: data/outputs/xpp90_model/xpp90_holdout_predictions.csv
+minutes_predictions_path: data/outputs/minutes_model/minutes_hybrid_predictions.csv
+defcon_predictions_path: data/outputs/defcon_model/defcon_model_predictions.csv
+output_dir: data/outputs/xp_pipeline
+
+test_seasons:
+  - "2024-25"
+  - "2025-26"
+
+xpp90_calibration:
+  "2024-25":
+    intercept: 0.8005487623960748
+    slope: 0.7429666647850028
+  "2025-26":
+    intercept: 1.1163558198028283
+    slope: 0.6873172591052762
+
+defcon_start_season: "2025-26"
+defcon_points_per_hit: 2.0
