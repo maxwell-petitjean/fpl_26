@@ -665,13 +665,22 @@ def build_future_features(
         current_dir / "future_fixtures_8gw.csv",
         low_memory=False,
     )
-
+    # player_history.csv is legitimately empty before the first GW
     history_path = current_dir / "player_history.csv"
-    history = (
-        pd.read_csv(history_path, low_memory=False)
-        if history_path.exists() and history_path.stat().st_size > 0
-        else pd.DataFrame()
-    )
+    
+    if history_path.exists():
+    
+        try:
+            history = pd.read_csv(
+                history_path,
+                low_memory=False,
+            )
+    
+        except pd.errors.EmptyDataError:
+            history = pd.DataFrame()
+    
+    else:
+        history = pd.DataFrame()
 
     current_history_fact = _current_history_to_fact(
         history,
