@@ -1,0 +1,26 @@
+season: "2026-27"
+horizon_gws: 8
+
+paths:
+  historic_fact: data/processed/fct_gw_historic.csv
+  historic_player_features: data/features/fct_gw_features_historic.csv
+  historic_xpp: data/modelling/fct_xpp90_historic.csv
+  current_dir: data/raw/current
+  all_known_fact: data/processed/fct_gw_all_known.csv
+  future_features: data/features/fct_gw_features_future.csv
+  output_dir: data/outputs/future_predictions
+
+availability_next_gw_only: true
+
+xpp90_calibration:
+  intercept: 1.1163558198028283
+  slope: 0.6873172591052762
+
+defcon:
+  points_per_hit: 2.0
+  defender_threshold: 10
+  attacker_threshold: 12
+
+fetch:
+  timeout_seconds: 30
+  max_workers: 12
