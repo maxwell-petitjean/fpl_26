@@ -106,7 +106,43 @@ def fetch_current_fpl(
     future_fixtures["away_team_code"] = future_fixtures["team_a"].map(team_code)
 
     any_finished = fixtures["finished"].fillna(False).any()
-    history = pd.DataFrame()
+    history = pd.DataFrame(
+        columns=[
+            "fpl_element_id",
+            "element",
+            "fixture",
+            "opponent_team",
+            "total_points",
+            "was_home",
+            "kickoff_time",
+            "team_h_score",
+            "team_a_score",
+            "round",
+            "minutes",
+            "goals_scored",
+            "assists",
+            "clean_sheets",
+            "goals_conceded",
+            "own_goals",
+            "penalties_saved",
+            "penalties_missed",
+            "yellow_cards",
+            "red_cards",
+            "saves",
+            "bonus",
+            "bps",
+            "influence",
+            "creativity",
+            "threat",
+            "ict_index",
+            "value",
+            "expected_goals",
+            "expected_assists",
+            "expected_goal_involvements",
+            "expected_goals_conceded",
+            "defensive_contribution",
+        ]
+    )
 
     if fetch_history and any_finished:
         frames = []
