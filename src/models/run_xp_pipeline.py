@@ -63,7 +63,10 @@ def run_xp_pipeline_backtest(config_path=CONFIG_PATH):
     xpp = xpp[xpp["season"].isin(config["test_seasons"])].copy()
 
     # Apply season-specific calibration to raw xPP90 holdout predictions.
-    xpp["calibrated_core_pp90"] = np.nan
+    xpp["calibrated_core_pp90"] = pd.to_numeric(
+        xpp["predicted_core_pp90"],
+        errors="coerce"
+    )
 
     for season, params in config["xpp90_calibration"].items():
         mask = xpp["season"].eq(season)
