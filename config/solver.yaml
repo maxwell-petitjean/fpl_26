@@ -1,0 +1,44 @@
+input_predictions: data/outputs/future_predictions/player_fixture_xp_8gw.csv
+solver_pool_output: data/outputs/solver/solver_pool.csv
+solution_output: data/outputs/solver/optimal_squad.csv
+lineup_output: data/outputs/solver/optimal_lineups.csv
+
+budget: 100.0
+max_players_per_team: 3
+
+squad:
+  GK: 2
+  DEF: 5
+  MID: 5
+  FWD: 3
+
+starting_xi:
+  total: 11
+  GK_min: 1
+  GK_max: 1
+  DEF_min: 3
+  DEF_max: 5
+  MID_min: 2
+  MID_max: 5
+  FWD_min: 1
+  FWD_max: 3
+
+gw_weights:
+  - 1.00
+  - 0.90
+  - 0.80
+  - 0.70
+  - 0.60
+  - 0.50
+  - 0.40
+  - 0.30
+
+bench_weight: 0.10
+
+minimum_xmins_next_gw: null
+exclude_statuses: []
+exclude_new_players: false
+
+solver:
+  msg: false
+  time_limit_seconds: 60
