@@ -56,7 +56,9 @@ def load_solver_pool():
 
     df = (
         client.query(sql)
-        .to_dataframe()
+        .to_dataframe(
+        create_bqstorage_client=False
+    )
     )
 
     if "player_code" in df.columns:
