@@ -233,6 +233,10 @@ with tab_wildcard:
     squad = result["squad"]
     lineups = result["lineups"]
 
+    # ========================================================
+    # SUMMARY CARDS
+    # ========================================================
+
     m1, m2, m3, m4 = st.columns(4)
 
     m1.metric(
@@ -255,55 +259,17 @@ with tab_wildcard:
         f"{result['objective_value']:.1f}",
     )
 
-    for position in [
-        "GK",
-        "DEF",
-        "MID",
-        "FWD",
-    ]:
-
-        pos = (
-            squad[
-                squad["position"].eq(
-                    position
-                )
-            ]
-            .sort_values(
-                "weighted_xp_8gw",
-                ascending=False,
-            )
-        )
-
-        st.markdown(
-            f"### {position}"
-        )
-
-        st.dataframe(
-            pos[
-                [
-                    c for c in [
-                        "player_code",
-                        "web_name",
-                        "team_name",
-                        "price",
-                        "xp_next_gw",
-                        "xp_8gw",
-                        "weighted_xp_8gw",
-                        "starts",
-                    ]
-                    if c in pos.columns
-                ]
-            ],
-            use_container_width=True,
-            hide_index=True,
-        )
-
     # ========================================================
     # STARTING XI MATRIX
     # ========================================================
 
     st.markdown(
         "### Starting XI by gameweek"
+    )
+
+    st.caption(
+        "Heatmap shows predicted xP. "
+        "Light cells indicate the player is benched."
     )
 
     lineup_matrix = (
@@ -455,12 +421,13 @@ with tab_wildcard:
 
             if is_start:
                 styles.append(
-                    "font-weight: 600;"
+                    "font-weight: 700;"
                 )
             else:
                 styles.append(
-                    "opacity: 0.35; "
-                    "background-color: #eeeeee;"
+                    "background-color: #e8e8e8; "
+                    "color: #777777; "
+                    "font-weight: 500;"
                 )
 
         styles.append(
@@ -474,7 +441,7 @@ with tab_wildcard:
         .style
         .background_gradient(
             subset=gameweeks,
-            cmap="YlGn",
+            cmap="Greens",
         )
         .apply(
             style_lineup_matrix,
@@ -491,12 +458,207 @@ with tab_wildcard:
         )
     )
 
-    st.caption(
-        "Heatmap shows predicted xP. "
-        "Faded cells indicate the player is benched."
-    )
-
     st.dataframe(
         styled_matrix,
         use_container_width=True,
+        height=650,
     )
+
+    # ========================================================
+    # TOP THREATS
+    # ========================================================
+
+    st.markdown(
+        "### ⚠️ Top threats (not selected)"
+    )
+
+    st.caption(
+        "Highest-scoring players outside the wildcard squad."
+    )
+
+    selected_codes = set(
+        squad[
+            "player_code"
+        ]
+        .astype(int)
+        .tolist()
+    )
+
+    threats = (
+        solver_pool[
+            ~solver_pool[
+                "player_code"
+            ]
+            .astype(int)
+            .isin(
+                selected_codes
+            )
+        ]
+        .copy()
+    )
+
+    threats = (
+        threats[
+            threats[
+                "solver_eligible"
+            ]
+            .fillna(False)
+        ]
+    )
+
+    threat_limits = {
+        "GK": 2,
+        "DEF": 5,
+        "MID": 5,
+        "FWD": 3,
+    }
+
+    threat_cols = (
+        st.columns(4)
+    )
+
+    for i, position in enumerate(
+        [
+            "GK",
+            "DEF",
+            "MID",
+            "FWD",
+        ]
+    ):
+
+        with threat_cols[i]:
+
+            st.markdown(
+                f"#### {position}"
+            )
+
+            pos_threats = (
+                threats[
+                    threats[
+                        "position"
+                    ].eq(
+                        position
+                    )
+                ]
+                .sort_values(
+                    "weighted_xp_8gw",
+                    ascending=False,
+                )
+                .head(
+                    threat_limits[
+                        position
+                    ]
+                )
+                .copy()
+            )
+
+            pos_threats = (
+                pos_threats[
+                    [
+                        c for c in [
+                            "web_name",
+                            "team_name",
+                            "price",
+                            "xp_next_gw",
+                            "xp_8gw",
+                            "weighted_xp_8gw",
+                        ]
+                        if c
+                        in pos_threats.columns
+                    ]
+                ]
+            )
+
+            st.dataframe(
+                pos_threats,
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "web_name":
+                        st.column_config.TextColumn(
+                            "Player"
+                        ),
+                    "team_name":
+                        st.column_config.TextColumn(
+                            "Team"
+                        ),
+                    "price":
+                        st.column_config.NumberColumn(
+                            "Price",
+                            format="£%.1fm",
+                        ),
+                    "xp_next_gw":
+                        st.column_config.NumberColumn(
+                            "xP next",
+                            format="%.2f",
+                        ),
+                    "xp_8gw":
+                        st.column_config.NumberColumn(
+                            "8GW xP",
+                            format="%.2f",
+                        ),
+                    "weighted_xp_8gw":
+                        st.column_config.NumberColumn(
+                            "Wtd xP",
+                            format="%.2f",
+                        ),
+                },
+            )
+
+    st.caption(
+        "Threat ranking uses weighted xP, "
+        "the same objective used by the wildcard solver."
+    )
+
+    # ========================================================
+    # SELECTED SQUAD DETAIL
+    # ========================================================
+
+    st.markdown(
+        "### Selected squad"
+    )
+
+    for position in [
+        "GK",
+        "DEF",
+        "MID",
+        "FWD",
+    ]:
+
+        pos = (
+            squad[
+                squad[
+                    "position"
+                ].eq(
+                    position
+                )
+            ]
+            .sort_values(
+                "weighted_xp_8gw",
+                ascending=False,
+            )
+        )
+
+        st.markdown(
+            f"#### {position}"
+        )
+
+        st.dataframe(
+            pos[
+                [
+                    c for c in [
+                        "player_code",
+                        "web_name",
+                        "team_name",
+                        "price",
+                        "xp_next_gw",
+                        "xp_8gw",
+                        "weighted_xp_8gw",
+                        "starts",
+                    ]
+                    if c in pos.columns
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
