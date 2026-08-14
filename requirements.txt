@@ -3,8 +3,11 @@ numpy
 scikit-learn
 lightgbm
 xgboost
-pulp
-streamlit
 joblib
 requests
 pyyaml
+
+streamlit
+google-cloud-bigquery
+google-cloud-bigquery-storage
+db-dtypes
