@@ -6,6 +6,7 @@ xgboost
 joblib
 requests
 pyyaml
+matplotlib
 
 streamlit
 google-cloud-bigquery
