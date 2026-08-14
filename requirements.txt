@@ -11,3 +11,4 @@ streamlit
 google-cloud-bigquery
 google-cloud-bigquery-storage
 db-dtypes
+pulp
