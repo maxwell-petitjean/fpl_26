@@ -1,3 +1,4 @@
+import numpy as np
 import streamlit as st
 
 from src.app.data import load_solver_pool
@@ -297,44 +298,205 @@ with tab_wildcard:
             hide_index=True,
         )
 
+    # ========================================================
+    # STARTING XI MATRIX
+    # ========================================================
+
     st.markdown(
         "### Starting XI by gameweek"
     )
 
+    lineup_matrix = (
+        lineups.copy()
+    )
+
+    lineup_matrix[
+        "starter_xp"
+    ] = np.where(
+        lineup_matrix[
+            "starting_xi"
+        ].eq(1),
+        lineup_matrix["xp"],
+        0,
+    )
+
     gameweeks = sorted(
-        lineups["gameweek"]
+        lineup_matrix[
+            "gameweek"
+        ]
         .dropna()
         .unique()
         .tolist()
     )
 
-    chosen_gw = st.selectbox(
-        "Gameweek",
-        gameweeks,
+    base = (
+        lineup_matrix[
+            [
+                "player_code",
+                "web_name",
+                "position",
+            ]
+        ]
+        .drop_duplicates(
+            "player_code"
+        )
+        .copy()
     )
 
-    gw_lineup = (
-        lineups[
-            lineups["gameweek"].eq(
-                chosen_gw
-            )
+    xp_pivot = (
+        lineup_matrix
+        .pivot(
+            index="player_code",
+            columns="gameweek",
+            values="xp",
+        )
+    )
+
+    starter_pivot = (
+        lineup_matrix
+        .pivot(
+            index="player_code",
+            columns="gameweek",
+            values="starting_xi",
+        )
+    )
+
+    starter_total = (
+        lineup_matrix
+        .groupby(
+            "player_code"
+        )[
+            "starter_xp"
         ]
+        .sum()
+    )
+
+    matrix = (
+        base
+        .set_index(
+            "player_code"
+        )
+        .join(
+            xp_pivot
+        )
+    )
+
+    matrix = matrix[
+        [
+            "web_name",
+            "position",
+            *gameweeks,
+        ]
+    ]
+
+    matrix[
+        "Total"
+    ] = (
+        starter_total
+    )
+
+    position_order = {
+        "GK": 1,
+        "DEF": 2,
+        "MID": 3,
+        "FWD": 4,
+    }
+
+    matrix[
+        "_position_order"
+    ] = (
+        matrix["position"]
+        .map(
+            position_order
+        )
+    )
+
+    matrix = (
+        matrix
         .sort_values(
             [
-                "starting_xi",
-                "position",
-                "xp",
+                "_position_order",
+                "Total",
             ],
             ascending=[
-                False,
                 True,
                 False,
             ],
         )
+        .drop(
+            columns=[
+                "_position_order"
+            ]
+        )
+    )
+
+    def style_lineup_matrix(
+        row
+    ):
+
+        styles = [
+            "",
+            "",
+        ]
+
+        player_code = (
+            row.name
+        )
+
+        for gw in gameweeks:
+
+            is_start = (
+                starter_pivot.loc[
+                    player_code,
+                    gw
+                ]
+                == 1
+            )
+
+            if is_start:
+                styles.append(
+                    "font-weight: 600;"
+                )
+            else:
+                styles.append(
+                    "opacity: 0.35; "
+                    "background-color: #eeeeee;"
+                )
+
+        styles.append(
+            "font-weight: 700;"
+        )
+
+        return styles
+
+    styled_matrix = (
+        matrix
+        .style
+        .background_gradient(
+            subset=gameweeks,
+            cmap="YlGn",
+        )
+        .apply(
+            style_lineup_matrix,
+            axis=1,
+        )
+        .format(
+            {
+                gw: "{:.2f}"
+                for gw in gameweeks
+            }
+            | {
+                "Total": "{:.2f}"
+            }
+        )
+    )
+
+    st.caption(
+        "Heatmap shows predicted xP. "
+        "Faded cells indicate the player is benched."
     )
 
     st.dataframe(
-        gw_lineup,
+        styled_matrix,
         use_container_width=True,
-        hide_index=True,
     )
