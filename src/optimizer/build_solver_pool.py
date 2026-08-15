@@ -544,8 +544,16 @@ def build_solver_pool(
                 "form_pp90_raw",
                 "first",
             ),
-            avg_model_pp90_8gw=(
+            model_xpp90_8gw=(
                 "predicted_core_pp90",
+                "mean",
+            ),
+            form_xpp90_8gw=(
+                "form_anchor_pp90",
+                "mean",
+            ),
+            fixture_xpp90_8gw=(
+                "fixture_anchor_pp90",
                 "mean",
             ),
             avg_fixture_multiplier_8gw=(
@@ -568,6 +576,28 @@ def build_solver_pool(
         on="player_code",
         how="left",
         validate="one_to_one",
+    )
+
+    meta[
+        "form_xpp90_delta"
+    ] = (
+        meta[
+            "form_xpp90_8gw"
+        ]
+        - meta[
+            "model_xpp90_8gw"
+        ]
+    )
+    
+    meta[
+        "fixture_xpp90_delta"
+    ] = (
+        meta[
+            "fixture_xpp90_8gw"
+        ]
+        - meta[
+            "model_xpp90_8gw"
+        ]
     )
 
     # --------------------------------------------------------
