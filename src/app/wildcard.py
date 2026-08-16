@@ -38,26 +38,37 @@ FIXTURE_SENSITIVE_POSITIONS = {
 }
 
 
-def apply_fixture_sensitivity(
+def apply_model_bias(
     solver_pool: pd.DataFrame,
-    fixture_sensitivity: float = 0.0,
+    model_bias: float = 0.0,
 ) -> pd.DataFrame:
     """
-    0.00 = canonical model
-    0.90 = 90% of full fixture effect
-    1.00 = full fixture effect
-    1.25 = 125% of full fixture effect
+    Signed scoring-bias control.
 
-    Only DEF and MID move.
+    -1.00 = fully revert core scoring to player L38
+     0.00 = canonical model
+    +1.00 = full extra fixture adjustment
+    +1.25 = aggressive fixture chasing
+
+    Left side:
+        mean reversion applies to ALL positions.
+
+    Right side:
+        extra fixture emphasis applies to DEF / MID only.
+        GK / FWD remain canonical.
     """
 
-    sensitivity = float(
-        fixture_sensitivity
+    bias = float(
+        model_bias
     )
 
-    if sensitivity < 0:
+    if (
+        bias < -1.0
+        or bias > 1.25
+    ):
         raise ValueError(
-            "fixture_sensitivity must be >= 0."
+            "model_bias must be between "
+            "-1.0 and 1.25."
         )
 
     pool = solver_pool.copy()
@@ -89,7 +100,7 @@ def apply_fixture_sensitivity(
             "Not enough GW weights."
         )
 
-    sensitive_mask = (
+    fixture_mask = (
         pool["position"]
         .isin(
             FIXTURE_SENSITIVE_POSITIONS
@@ -97,48 +108,97 @@ def apply_fixture_sensitivity(
     )
 
     for gw in gameweeks:
+
         base_col = (
             f"xp_gw{gw}"
         )
+
+        mean_col = (
+            f"mean_reversion_xp_gw{gw}"
+        )
+
         fixture_col = (
             f"fixture_full_xp_gw{gw}"
         )
+
         scenario_col = (
             f"scenario_xp_gw{gw}"
         )
 
-        if fixture_col not in pool.columns:
-            raise ValueError(
-                f"Missing {fixture_col}. "
-                "Rebuild solver pool first."
-            )
-
+        # Always start from the canonical model.
         pool[
             scenario_col
         ] = pool[
             base_col
         ]
 
-        pool.loc[
-            sensitive_mask,
-            scenario_col,
-        ] = (
-            pool.loc[
-                sensitive_mask,
-                base_col,
-            ]
-            + sensitivity
-            * (
-                pool.loc[
-                    sensitive_mask,
-                    fixture_col,
+        # ----------------------------------------------------
+        # LEFT: REVERT TOWARDS LONG-RUN L38
+        # Applies to all positions.
+        # ----------------------------------------------------
+
+        if bias < 0:
+
+            if mean_col not in pool.columns:
+                raise ValueError(
+                    f"Missing {mean_col}. "
+                    "Rebuild solver pool first."
+                )
+
+            strength = abs(
+                bias
+            )
+
+            pool[
+                scenario_col
+            ] = (
+                pool[
+                    base_col
                 ]
-                - pool.loc[
-                    sensitive_mask,
+                + strength
+                * (
+                    pool[
+                        mean_col
+                    ]
+                    - pool[
+                        base_col
+                    ]
+                )
+            )
+
+        # ----------------------------------------------------
+        # RIGHT: EXTRA FIXTURE EMPHASIS
+        # DEF / MID only.
+        # ----------------------------------------------------
+
+        elif bias > 0:
+
+            if fixture_col not in pool.columns:
+                raise ValueError(
+                    f"Missing {fixture_col}. "
+                    "Rebuild solver pool first."
+                )
+
+            pool.loc[
+                fixture_mask,
+                scenario_col,
+            ] = (
+                pool.loc[
+                    fixture_mask,
                     base_col,
                 ]
+                + bias
+                * (
+                    pool.loc[
+                        fixture_mask,
+                        fixture_col,
+                    ]
+                    - pool.loc[
+                        fixture_mask,
+                        base_col,
+                    ]
+                )
             )
-        )
 
     pool[
         "scenario_xp_8gw"
@@ -167,13 +227,19 @@ def apply_fixture_sensitivity(
     )
 
     pool[
-        "scenario_fixture_uplift_8gw"
+        "scenario_delta_8gw"
     ] = (
-        pool["scenario_xp_8gw"]
-        - pool["xp_8gw"]
+        pool[
+            "scenario_xp_8gw"
+        ]
+        - pool[
+            "xp_8gw"
+        ]
     )
 
-    first_gw = gameweeks[0]
+    first_gw = (
+        gameweeks[0]
+    )
 
     pool[
         "scenario_xp_next_gw"
@@ -184,21 +250,21 @@ def apply_fixture_sensitivity(
     )
 
     pool[
-        "fixture_sensitivity"
-    ] = sensitivity
+        "model_bias"
+    ] = bias
 
     return pool
 
 
 def solve_wildcard(
     solver_pool: pd.DataFrame,
-    fixture_sensitivity: float = 0.0,
+    model_bias: float = 0.0,
 ):
 
-    pool = apply_fixture_sensitivity(
+    pool = apply_model_bias(
         solver_pool,
-        fixture_sensitivity=(
-            fixture_sensitivity
+        model_bias=(
+            model_bias
         ),
     )
 
@@ -595,7 +661,7 @@ def solve_wildcard(
             .sum()
         ),
         "gameweeks": gameweeks,
-        "fixture_sensitivity": float(
-            fixture_sensitivity
+        "model_bias": float(
+            model_bias
         ),
     }
