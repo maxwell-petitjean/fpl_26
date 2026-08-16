@@ -5,20 +5,7 @@ import pandas as pd
 import yaml
 
 
-CONFIG_PATH = Path(
-    "config/solver.yaml"
-)
-
-# ============================================================
-# EDA SCENARIO SETTINGS
-#
-# These DO NOT alter the canonical solver objective.
-#
-# form_xp / fixture_xp are exploratory views only.
-# The maximum pull away from the model is 20%.
-# ============================================================
-
-SCENARIO_STRENGTH = 0.20
+CONFIG_PATH = Path("config/solver.yaml")
 
 FORM_WEIGHTS = {
     6: 0.50,
@@ -35,14 +22,14 @@ FIXTURE_WEIGHTS = {
 FIXTURE_MULTIPLIER_MIN = 0.75
 FIXTURE_MULTIPLIER_MAX = 1.25
 
+FIXTURE_SENSITIVE_POSITIONS = {
+    "DEF",
+    "MID",
+}
 
-def _load_config(
-    path=CONFIG_PATH,
-):
-    with open(
-        path,
-        "r",
-    ) as f:
+
+def _load_config(path=CONFIG_PATH):
+    with open(path, "r") as f:
         return yaml.safe_load(f)
 
 
@@ -51,25 +38,16 @@ def _weighted_columns(
     column_template,
     weights,
 ):
-    """
-    Weighted combination with row-level
-    re-normalisation when some windows
-    are missing.
-    """
-
     numerator = pd.Series(
         0.0,
         index=df.index,
     )
-
     denominator = pd.Series(
         0.0,
         index=df.index,
     )
 
-    for window, weight in (
-        weights.items()
-    ):
+    for window, weight in weights.items():
         col = column_template.format(
             window=window
         )
@@ -84,15 +62,13 @@ def _weighted_columns(
 
         valid = values.notna()
 
-        numerator = (
-            numerator
-            + values.fillna(0)
+        numerator += (
+            values.fillna(0)
             * float(weight)
         )
 
-        denominator = (
-            denominator
-            + valid.astype(float)
+        denominator += (
+            valid.astype(float)
             * float(weight)
         )
 
@@ -105,29 +81,9 @@ def _weighted_columns(
     )
 
 
-def _add_form_fixture_eda(
+def _add_fixture_scenario_fields(
     df: pd.DataFrame,
 ) -> pd.DataFrame:
-    """
-    Add fixture-level exploratory scenario fields.
-
-    Canonical model:
-        predicted_core_pp90
-        xp
-
-    Form view:
-        raw recent form is L6/L12/L38,
-        but only 20% of the difference
-        from the model is applied.
-
-    Fixture view:
-        opponent strength is measured
-        relative to the position-group
-        average, then only 20% of the
-        multiplier effect is applied.
-
-    DefCon is unchanged in all scenarios.
-    """
 
     out = df.copy()
 
@@ -135,6 +91,7 @@ def _add_form_fixture_eda(
         "predicted_core_pp90",
         "final_predicted_minutes",
         "xp",
+        "position",
     ]
 
     missing = [
@@ -144,13 +101,9 @@ def _add_form_fixture_eda(
 
     if missing:
         raise ValueError(
-            "Cannot build form/fixture EDA. "
+            "Cannot build fixture scenario. "
             f"Missing columns: {missing}"
         )
-
-    # --------------------------------------------------------
-    # POSITION GROUP
-    # --------------------------------------------------------
 
     if "position_group" not in out.columns:
         out["position_group"] = (
@@ -165,65 +118,27 @@ def _add_form_fixture_eda(
             )
         )
 
-    # --------------------------------------------------------
-    # FORM
-    # --------------------------------------------------------
-
-    out[
-        "form_pp90_raw"
-    ] = _weighted_columns(
+    # EDA-only form field retained.
+    out["form_pp90_raw"] = _weighted_columns(
         out,
         "player_core_pp90_l{window}",
         FORM_WEIGHTS,
     )
 
-    # New / low-history players:
-    # neutral scenario = model.
-    out[
-        "form_pp90_raw"
-    ] = (
+    out["form_pp90_raw"] = (
         out["form_pp90_raw"]
         .fillna(
-            out[
-                "predicted_core_pp90"
-            ]
+            out["predicted_core_pp90"]
         )
     )
 
-    out[
-        "form_anchor_pp90"
-    ] = (
-        out[
-            "predicted_core_pp90"
-        ]
-        + SCENARIO_STRENGTH
-        * (
-            out["form_pp90_raw"]
-            - out[
-                "predicted_core_pp90"
-            ]
-        )
-    )
-
-    # --------------------------------------------------------
-    # FIXTURE
-    # --------------------------------------------------------
-
-    out[
-        "opponent_points_allowed"
-    ] = _weighted_columns(
+    # Fixture strength.
+    out["opponent_points_allowed"] = _weighted_columns(
         out,
-        (
-            "opp_pos_core_points_"
-            "avg_l{window}_filled"
-        ),
+        "opp_pos_core_points_avg_l{window}_filled",
         FIXTURE_WEIGHTS,
     )
 
-    # Compute the benchmark from unique
-    # fixture x position-group rows so the
-    # number of players at each position
-    # does not bias the league average.
     fixture_benchmark = (
         out[
             [
@@ -240,141 +155,96 @@ def _add_form_fixture_eda(
         )
         .groupby(
             "position_group"
-        )[
-            "opponent_points_allowed"
-        ]
+        )["opponent_points_allowed"]
         .mean()
     )
 
-    out[
-        "opponent_points_allowed_avg"
-    ] = (
+    out["opponent_points_allowed_avg"] = (
         out["position_group"]
         .map(
             fixture_benchmark
         )
     )
 
-    out[
-        "fixture_multiplier_raw"
-    ] = (
-        out[
-            "opponent_points_allowed"
-        ]
-        /
-        out[
-            "opponent_points_allowed_avg"
-        ]
+    out["fixture_multiplier_raw"] = (
+        out["opponent_points_allowed"]
+        / out["opponent_points_allowed_avg"]
     )
 
-    # Missing opponent information should
-    # be neutral rather than null.
-    out[
-        "fixture_multiplier_raw"
-    ] = (
-        out[
-            "fixture_multiplier_raw"
-        ]
+    out["fixture_multiplier_raw"] = (
+        out["fixture_multiplier_raw"]
         .fillna(1.0)
     )
 
-    out[
-        "fixture_multiplier"
-    ] = (
-        out[
-            "fixture_multiplier_raw"
-        ]
+    out["fixture_multiplier"] = (
+        out["fixture_multiplier_raw"]
         .clip(
-            lower=(
-                FIXTURE_MULTIPLIER_MIN
-            ),
-            upper=(
-                FIXTURE_MULTIPLIER_MAX
-            ),
+            lower=FIXTURE_MULTIPLIER_MIN,
+            upper=FIXTURE_MULTIPLIER_MAX,
         )
     )
 
-    out[
-        "fixture_anchor_pp90"
+    sensitive = (
+        out["position"]
+        .isin(
+            FIXTURE_SENSITIVE_POSITIONS
+        )
+    )
+
+    # Full fixture xPP90.
+    # FWD/GK remain canonical.
+    out["fixture_full_xpp90"] = (
+        out["predicted_core_pp90"]
+    )
+
+    out.loc[
+        sensitive,
+        "fixture_full_xpp90",
     ] = (
-        out[
-            "predicted_core_pp90"
+        out.loc[
+            sensitive,
+            "predicted_core_pp90",
         ]
-        * (
-            1
-            + SCENARIO_STRENGTH
-            * (
-                out[
-                    "fixture_multiplier"
-                ]
-                - 1
-            )
-        )
+        * out.loc[
+            sensitive,
+            "fixture_multiplier",
+        ]
     )
 
-    # --------------------------------------------------------
-    # XP
-    # --------------------------------------------------------
+    out["fixture_xpp90_delta"] = (
+        out["fixture_full_xpp90"]
+        - out["predicted_core_pp90"]
+    )
 
     mins = pd.to_numeric(
-        out[
-            "final_predicted_minutes"
-        ],
+        out["final_predicted_minutes"],
         errors="coerce",
     ).fillna(0)
 
-    if (
-        "expected_defcon_points"
-        in out.columns
-    ):
-        defcon = pd.to_numeric(
-            out[
-                "expected_defcon_points"
-            ],
-            errors="coerce",
-        ).fillna(0)
-    else:
-        defcon = pd.Series(
-            0.0,
-            index=out.index,
+    out["model_core_xp_calc"] = (
+        out["predicted_core_pp90"]
+        * mins
+        / 90
+    )
+
+    out["fixture_full_core_xp"] = (
+        out["fixture_full_xpp90"]
+        * mins
+        / 90
+    )
+
+    # Preserve everything already included in canonical xp.
+    out["fixture_full_xp"] = (
+        out["xp"]
+        + (
+            out["fixture_full_core_xp"]
+            - out["model_core_xp_calc"]
         )
-
-    out[
-        "form_core_xp"
-    ] = (
-        out[
-            "form_anchor_pp90"
-        ]
-        * mins
-        / 90
     )
 
-    out[
-        "fixture_core_xp"
-    ] = (
-        out[
-            "fixture_anchor_pp90"
-        ]
-        * mins
-        / 90
-    )
-
-    out[
-        "form_xp"
-    ] = (
-        out[
-            "form_core_xp"
-        ]
-        + defcon
-    )
-
-    out[
-        "fixture_xp"
-    ] = (
-        out[
-            "fixture_core_xp"
-        ]
-        + defcon
+    out["fixture_full_xp_delta"] = (
+        out["fixture_full_xp"]
+        - out["xp"]
     )
 
     return out
@@ -389,9 +259,7 @@ def build_solver_pool(
     )
 
     df = pd.read_csv(
-        config[
-            "input_predictions"
-        ],
+        config["input_predictions"],
         low_memory=False,
     )
 
@@ -418,25 +286,14 @@ def build_solver_pool(
             f"required columns: {missing}"
         )
 
-    # ========================================================
-    # ADD EXPLORATORY FORM / FIXTURE VIEWS
-    # ========================================================
-
-    df = _add_form_fixture_eda(
+    df = _add_fixture_scenario_fields(
         df
     )
-
-    # --------------------------------------------------------
-    # Canonical grain = player_code
-    # web_name is display-only and may duplicate.
-    # --------------------------------------------------------
 
     position_check = (
         df.groupby(
             "player_code"
-        )[
-            "position"
-        ]
+        )["position"]
         .nunique()
     )
 
@@ -455,29 +312,19 @@ def build_solver_pool(
             .to_string()
         )
 
-    # --------------------------------------------------------
-    # LATEST PLAYER METADATA
-    # --------------------------------------------------------
-
     meta_source = df.copy()
 
-    meta_source["_gw"] = (
-        pd.to_numeric(
-            meta_source[
-                "gameweek"
-            ],
-            errors="coerce",
-        )
+    meta_source["_gw"] = pd.to_numeric(
+        meta_source["gameweek"],
+        errors="coerce",
     )
 
-    meta_source["_ko"] = (
-        pd.to_datetime(
-            meta_source.get(
-                "kickoff_time"
-            ),
-            utc=True,
-            errors="coerce",
-        )
+    meta_source["_ko"] = pd.to_datetime(
+        meta_source.get(
+            "kickoff_time"
+        ),
+        utc=True,
+        errors="coerce",
     )
 
     meta_cols = [
@@ -512,16 +359,12 @@ def build_solver_pool(
             "player_code",
             as_index=False,
         )
-        .tail(1)[
-            meta_cols
-        ]
+        .tail(1)[meta_cols]
         .copy()
     )
 
     if (
-        meta[
-            "player_code"
-        ]
+        meta["player_code"]
         .duplicated()
         .any()
     ):
@@ -529,10 +372,6 @@ def build_solver_pool(
             "Metadata is not unique "
             "to player_code."
         )
-
-    # --------------------------------------------------------
-    # PLAYER-LEVEL EDA CONTEXT
-    # --------------------------------------------------------
 
     player_context = (
         df.groupby(
@@ -548,12 +387,8 @@ def build_solver_pool(
                 "predicted_core_pp90",
                 "mean",
             ),
-            form_xpp90_8gw=(
-                "form_anchor_pp90",
-                "mean",
-            ),
-            fixture_xpp90_8gw=(
-                "fixture_anchor_pp90",
+            fixture_xpp90_full_8gw=(
+                "fixture_full_xpp90",
                 "mean",
             ),
             avg_fixture_multiplier_8gw=(
@@ -571,39 +406,17 @@ def build_solver_pool(
         )
     )
 
+    player_context["fixture_xpp90_delta_8gw"] = (
+        player_context["fixture_xpp90_full_8gw"]
+        - player_context["model_xpp90_8gw"]
+    )
+
     meta = meta.merge(
         player_context,
         on="player_code",
         how="left",
         validate="one_to_one",
     )
-
-    meta[
-        "form_xpp90_delta"
-    ] = (
-        meta[
-            "form_xpp90_8gw"
-        ]
-        - meta[
-            "model_xpp90_8gw"
-        ]
-    )
-    
-    meta[
-        "fixture_xpp90_delta"
-    ] = (
-        meta[
-            "fixture_xpp90_8gw"
-        ]
-        - meta[
-            "model_xpp90_8gw"
-        ]
-    )
-
-    # --------------------------------------------------------
-    # AGGREGATE FIXTURE ROWS TO PLAYER x GW
-    # Handles DGWs correctly.
-    # --------------------------------------------------------
 
     named_aggs = {
         "fixtures": (
@@ -618,20 +431,14 @@ def build_solver_pool(
             "xp",
             "sum",
         ),
-        "form_xp": (
-            "form_xp",
-            "sum",
-        ),
-        "fixture_xp": (
-            "fixture_xp",
+        "fixture_full_xp": (
+            "fixture_full_xp",
             "sum",
         ),
     }
 
     if "core_xp" in df.columns:
-        named_aggs[
-            "core_xp"
-        ] = (
+        named_aggs["core_xp"] = (
             "core_xp",
             "sum",
         )
@@ -640,9 +447,7 @@ def build_solver_pool(
         "expected_defcon_points"
         in df.columns
     ):
-        named_aggs[
-            "defcon_xp"
-        ] = (
+        named_aggs["defcon_xp"] = (
             "expected_defcon_points",
             "sum",
         )
@@ -662,9 +467,7 @@ def build_solver_pool(
 
     gameweeks = sorted(
         pd.to_numeric(
-            player_gw[
-                "gameweek"
-            ],
+            player_gw["gameweek"],
             errors="coerce",
         )
         .dropna()
@@ -687,10 +490,8 @@ def build_solver_pool(
         < len(gameweeks)
     ):
         raise ValueError(
-            f"Need {len(gameweeks)} "
-            "GW weights, "
-            f"but only {len(weights)} "
-            "supplied."
+            f"Need {len(gameweeks)} GW weights, "
+            f"but only {len(weights)} supplied."
         )
 
     gw_weight_map = {
@@ -702,10 +503,6 @@ def build_solver_pool(
         )
     }
 
-    # --------------------------------------------------------
-    # ONE ROW PER PLAYER CODE
-    # --------------------------------------------------------
-
     pool = meta.copy()
 
     metrics = [
@@ -714,8 +511,7 @@ def build_solver_pool(
             "fixtures",
             "xmins",
             "xp",
-            "form_xp",
-            "fixture_xp",
+            "fixture_full_xp",
             "core_xp",
             "defcon_xp",
         ]
@@ -723,13 +519,10 @@ def build_solver_pool(
     ]
 
     for gw in gameweeks:
-
         gw_df = (
             player_gw[
                 pd.to_numeric(
-                    player_gw[
-                        "gameweek"
-                    ],
+                    player_gw["gameweek"],
                     errors="coerce",
                 ).eq(gw)
             ]
@@ -742,33 +535,21 @@ def build_solver_pool(
             pool[
                 f"{metric}_gw{gw}"
             ] = (
-                pool[
-                    "player_code"
-                ]
+                pool["player_code"]
                 .map(
-                    gw_df[
-                        metric
-                    ]
+                    gw_df[metric]
                 )
                 .fillna(0)
             )
 
-    # --------------------------------------------------------
-    # CANONICAL MODEL TOTALS
-    # --------------------------------------------------------
-
-    pool[
-        "xp_8gw"
-    ] = sum(
+    pool["xp_8gw"] = sum(
         pool[
             f"xp_gw{gw}"
         ]
         for gw in gameweeks
     )
 
-    pool[
-        "weighted_xp_8gw"
-    ] = sum(
+    pool["weighted_xp_8gw"] = sum(
         pool[
             f"xp_gw{gw}"
         ]
@@ -776,193 +557,68 @@ def build_solver_pool(
         for gw in gameweeks
     )
 
-    pool[
-        "xmins_8gw"
-    ] = sum(
+    pool["xmins_8gw"] = sum(
         pool[
             f"xmins_gw{gw}"
         ]
         for gw in gameweeks
     )
 
-    # --------------------------------------------------------
-    # EDA SCENARIO TOTALS
-    # --------------------------------------------------------
-
-    pool[
-        "model_xp_8gw"
-    ] = pool[
-        "xp_8gw"
-    ]
-
-    pool[
-        "form_xp_8gw"
-    ] = sum(
+    pool["fixture_full_xp_8gw"] = sum(
         pool[
-            f"form_xp_gw{gw}"
+            f"fixture_full_xp_gw{gw}"
         ]
         for gw in gameweeks
     )
 
     pool[
-        "fixture_xp_8gw"
+        "fixture_full_weighted_xp_8gw"
     ] = sum(
         pool[
-            f"fixture_xp_gw{gw}"
+            f"fixture_full_xp_gw{gw}"
         ]
+        * gw_weight_map[gw]
         for gw in gameweeks
     )
 
+    pool["fixture_full_uplift_8gw"] = (
+        pool["fixture_full_xp_8gw"]
+        - pool["xp_8gw"]
+    )
+
     pool[
-        "form_uplift_8gw"
+        "fixture_full_weighted_uplift_8gw"
     ] = (
         pool[
-            "form_xp_8gw"
+            "fixture_full_weighted_xp_8gw"
         ]
         - pool[
-            "model_xp_8gw"
+            "weighted_xp_8gw"
         ]
     )
 
-    pool[
-        "fixture_uplift_8gw"
-    ] = (
+    first_gw = gameweeks[0]
+
+    pool["xmins_next_gw"] = (
         pool[
-            "fixture_xp_8gw"
-        ]
-        - pool[
-            "model_xp_8gw"
+            f"xmins_gw{first_gw}"
         ]
     )
 
-    pool[
-        "form_uplift_pct"
-    ] = np.where(
+    pool["xp_next_gw"] = (
         pool[
-            "model_xp_8gw"
-        ] != 0,
-        (
-            pool[
-                "form_uplift_8gw"
-            ]
-            / pool[
-                "model_xp_8gw"
-            ]
-        )
-        * 100,
-        np.nan,
-    )
-
-    pool[
-        "fixture_uplift_pct"
-    ] = np.where(
-        pool[
-            "model_xp_8gw"
-        ] != 0,
-        (
-            pool[
-                "fixture_uplift_8gw"
-            ]
-            / pool[
-                "model_xp_8gw"
-            ]
-        )
-        * 100,
-        np.nan,
-    )
-
-    n_gws = len(
-        gameweeks
-    )
-
-    pool[
-        "model_xp_per_gw"
-    ] = (
-        pool[
-            "model_xp_8gw"
+            f"xp_gw{first_gw}"
         ]
-        / n_gws
     )
 
-    pool[
-        "form_xp_per_gw"
-    ] = (
+    pool["fixture_full_xp_next_gw"] = (
         pool[
-            "form_xp_8gw"
+            f"fixture_full_xp_gw{first_gw}"
         ]
-        / n_gws
     )
 
-    pool[
-        "fixture_xp_per_gw"
-    ] = (
-        pool[
-            "fixture_xp_8gw"
-        ]
-        / n_gws
-    )
-
-    pool[
-        "form_uplift_per_gw"
-    ] = (
-        pool[
-            "form_uplift_8gw"
-        ]
-        / n_gws
-    )
-
-    pool[
-        "fixture_uplift_per_gw"
-    ] = (
-        pool[
-            "fixture_uplift_8gw"
-        ]
-        / n_gws
-    )
-
-    # --------------------------------------------------------
-    # NEXT GW
-    # --------------------------------------------------------
-
-    first_gw = (
-        gameweeks[0]
-    )
-
-    pool[
-        "xmins_next_gw"
-    ] = pool[
-        f"xmins_gw{first_gw}"
-    ]
-
-    pool[
-        "xp_next_gw"
-    ] = pool[
-        f"xp_gw{first_gw}"
-    ]
-
-    pool[
-        "form_xp_next_gw"
-    ] = pool[
-        f"form_xp_gw{first_gw}"
-    ]
-
-    pool[
-        "fixture_xp_next_gw"
-    ] = pool[
-        f"fixture_xp_gw{first_gw}"
-    ]
-
-    # --------------------------------------------------------
-    # OPTIONAL SOLVER ELIGIBILITY FILTERS
-    # --------------------------------------------------------
-
-    pool[
-        "solver_eligible"
-    ] = True
-
-    pool[
-        "exclusion_reason"
-    ] = ""
+    pool["solver_eligible"] = True
+    pool["exclusion_reason"] = ""
 
     min_xmins = config.get(
         "minimum_xmins_next_gw"
@@ -970,12 +626,8 @@ def build_solver_pool(
 
     if min_xmins is not None:
         mask = (
-            pool[
-                "xmins_next_gw"
-            ]
-            < float(
-                min_xmins
-            )
+            pool["xmins_next_gw"]
+            < float(min_xmins)
         )
 
         pool.loc[
@@ -1026,9 +678,7 @@ def build_solver_pool(
         in pool.columns
     ):
         mask = (
-            pool[
-                "is_new_player"
-            ]
+            pool["is_new_player"]
             .fillna(False)
         )
 
@@ -1042,10 +692,6 @@ def build_solver_pool(
             "exclusion_reason",
         ] = "new_player"
 
-    # --------------------------------------------------------
-    # HARD GRAIN VALIDATION
-    # --------------------------------------------------------
-
     duplicate_codes = pool[
         pool[
             "player_code"
@@ -1055,9 +701,7 @@ def build_solver_pool(
         )
     ]
 
-    if (
-        not duplicate_codes.empty
-    ):
+    if not duplicate_codes.empty:
         raise ValueError(
             "Solver pool grain failure: "
             "player_code is not unique.\n"
@@ -1101,66 +745,30 @@ def build_solver_pool(
             index=False,
         )
 
-    print(
-        "=== SOLVER POOL ==="
-    )
-
+    print("=== SOLVER POOL ===")
     print(
         f"Rows / players: "
         f"{len(pool):,}"
     )
-
-    print(
-        "Duplicate player_code:",
-        pool[
-            "player_code"
-        ]
-        .duplicated()
-        .sum(),
-    )
-
-    print(
-        "Duplicate web_name rows:",
-        pool[
-            "web_name"
-        ]
-        .duplicated(
-            keep=False
-        )
-        .sum(),
-        "(allowed)",
-    )
-
     print(
         "Forecast GWs:",
         gameweeks,
     )
-
     print(
-        "Eligible players:",
-        int(
-            pool[
-                "solver_eligible"
-            ]
-            .sum()
+        "Fixture-sensitive positions:",
+        sorted(
+            FIXTURE_SENSITIVE_POSITIONS
         ),
     )
-
     print(
-        "EDA scenario strength:",
-        f"{SCENARIO_STRENGTH:.0%}",
-    )
-
-    print(
-        "Canonical solver score "
-        "remains xp / weighted_xp_8gw"
+        "Canonical xp unchanged; "
+        "full fixture scenario added."
     )
 
     return {
         "pool": pool,
         "gameweeks": gameweeks,
-        "gw_weights":
-            gw_weight_map,
+        "gw_weights": gw_weight_map,
     }
 
 
