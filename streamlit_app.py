@@ -989,11 +989,12 @@ with tab_wildcard:
         )
         .format(
             {
-                gw: "{:.2f}"
-                for gw in gameweeks
-            }
-            | {
-                "Total": "{:.2f}"
+                "price": "£{:.1f}m",
+                **{
+                    gw: "{:.2f}"
+                    for gw in gameweeks
+                },
+                "Total": "{:.2f}",
             }
         )
     )
