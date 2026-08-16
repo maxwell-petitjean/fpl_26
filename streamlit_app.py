@@ -556,6 +556,7 @@ with tab_pool:
         view[display_columns],
         width="stretch",
         hide_index=True,
+        height=600,
         column_order=solver_default_columns,
         column_config={
             "price":
@@ -1232,7 +1233,6 @@ with tab_wildcard:
                 pos_threats,
                 hide_index=True,
                 width="stretch",
-                height=600,
                 column_order=threat_default_columns,
                 column_config={
                     "web_name":
