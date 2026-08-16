@@ -889,6 +889,7 @@ with tab_wildcard:
         [
             "web_name",
             "position",
+            "price",
             *gameweeks,
         ]
     ]
