@@ -32,30 +32,35 @@ GW_WEIGHTS = [
 
 BENCH_WEIGHT = 0.10
 
+FIXTURE_SENSITIVE_POSITIONS = {
+    "DEF",
+    "MID",
+}
 
-def solve_wildcard(
+
+def apply_fixture_sensitivity(
     solver_pool: pd.DataFrame,
-):
+    fixture_sensitivity: float = 0.0,
+) -> pd.DataFrame:
+    """
+    0.00 = canonical model
+    0.90 = 90% of full fixture effect
+    1.00 = full fixture effect
+    1.25 = 125% of full fixture effect
 
-    pool = (
-        solver_pool[
-            solver_pool[
-                "solver_eligible"
-            ]
-            .fillna(False)
-        ]
-        .copy()
+    Only DEF and MID move.
+    """
+
+    sensitivity = float(
+        fixture_sensitivity
     )
 
-    if (
-        pool["player_code"]
-        .duplicated()
-        .any()
-    ):
+    if sensitivity < 0:
         raise ValueError(
-            "Solver pool is not unique "
-            "to player_code."
+            "fixture_sensitivity must be >= 0."
         )
+
+    pool = solver_pool.copy()
 
     gameweeks = sorted(
         int(
@@ -79,14 +84,160 @@ def solve_wildcard(
             "No xp_gw* columns found."
         )
 
-    if len(
-        GW_WEIGHTS
-    ) < len(
-        gameweeks
-    ):
+    if len(GW_WEIGHTS) < len(gameweeks):
         raise ValueError(
             "Not enough GW weights."
         )
+
+    sensitive_mask = (
+        pool["position"]
+        .isin(
+            FIXTURE_SENSITIVE_POSITIONS
+        )
+    )
+
+    for gw in gameweeks:
+        base_col = (
+            f"xp_gw{gw}"
+        )
+        fixture_col = (
+            f"fixture_full_xp_gw{gw}"
+        )
+        scenario_col = (
+            f"scenario_xp_gw{gw}"
+        )
+
+        if fixture_col not in pool.columns:
+            raise ValueError(
+                f"Missing {fixture_col}. "
+                "Rebuild solver pool first."
+            )
+
+        pool[
+            scenario_col
+        ] = pool[
+            base_col
+        ]
+
+        pool.loc[
+            sensitive_mask,
+            scenario_col,
+        ] = (
+            pool.loc[
+                sensitive_mask,
+                base_col,
+            ]
+            + sensitivity
+            * (
+                pool.loc[
+                    sensitive_mask,
+                    fixture_col,
+                ]
+                - pool.loc[
+                    sensitive_mask,
+                    base_col,
+                ]
+            )
+        )
+
+    pool[
+        "scenario_xp_8gw"
+    ] = sum(
+        pool[
+            f"scenario_xp_gw{gw}"
+        ]
+        for gw in gameweeks
+    )
+
+    gw_weight_map = {
+        gw: GW_WEIGHTS[i]
+        for i, gw in enumerate(
+            gameweeks
+        )
+    }
+
+    pool[
+        "scenario_weighted_xp_8gw"
+    ] = sum(
+        pool[
+            f"scenario_xp_gw{gw}"
+        ]
+        * gw_weight_map[gw]
+        for gw in gameweeks
+    )
+
+    pool[
+        "scenario_fixture_uplift_8gw"
+    ] = (
+        pool["scenario_xp_8gw"]
+        - pool["xp_8gw"]
+    )
+
+    first_gw = gameweeks[0]
+
+    pool[
+        "scenario_xp_next_gw"
+    ] = (
+        pool[
+            f"scenario_xp_gw{first_gw}"
+        ]
+    )
+
+    pool[
+        "fixture_sensitivity"
+    ] = sensitivity
+
+    return pool
+
+
+def solve_wildcard(
+    solver_pool: pd.DataFrame,
+    fixture_sensitivity: float = 0.0,
+):
+
+    pool = apply_fixture_sensitivity(
+        solver_pool,
+        fixture_sensitivity=(
+            fixture_sensitivity
+        ),
+    )
+
+    pool = (
+        pool[
+            pool["solver_eligible"]
+            .fillna(False)
+        ]
+        .copy()
+    )
+
+    if (
+        pool["player_code"]
+        .duplicated()
+        .any()
+    ):
+        raise ValueError(
+            "Solver pool is not unique "
+            "to player_code."
+        )
+
+    gameweeks = sorted(
+        int(
+            c.replace(
+                "scenario_xp_gw",
+                "",
+            )
+        )
+        for c in pool.columns
+        if (
+            c.startswith(
+                "scenario_xp_gw"
+            )
+            and c.replace(
+                "scenario_xp_gw",
+                ""
+            ).isdigit()
+        )
+    )
 
     gw_weight_map = {
         gw: GW_WEIGHTS[i]
@@ -104,9 +255,7 @@ def solve_wildcard(
     row = (
         pool.assign(
             player_code=(
-                pool[
-                    "player_code"
-                ]
+                pool["player_code"]
                 .astype(int)
             )
         )
@@ -138,18 +287,12 @@ def solve_wildcard(
         for gw in gameweeks
     }
 
-    # --------------------------------------------------------
-    # Objective:
-    # starters get full xP;
-    # bench gets 10% xP.
-    # --------------------------------------------------------
-
     model += pulp.lpSum(
         gw_weight_map[gw]
         * float(
             row.loc[
                 p,
-                f"xp_gw{gw}",
+                f"scenario_xp_gw{gw}",
             ]
         )
         * (
@@ -169,10 +312,6 @@ def solve_wildcard(
         for p in players
         for gw in gameweeks
     )
-
-    # --------------------------------------------------------
-    # Squad rules
-    # --------------------------------------------------------
 
     model += (
         pulp.lpSum(
@@ -199,7 +338,6 @@ def solve_wildcard(
     for position, required in (
         SQUAD_REQUIREMENTS.items()
     ):
-
         pos_players = [
             p for p in players
             if row.loc[
@@ -221,7 +359,6 @@ def solve_wildcard(
         .dropna()
         .unique()
     ):
-
         team_players = [
             p for p in players
             if row.loc[
@@ -238,12 +375,7 @@ def solve_wildcard(
             <= MAX_PLAYERS_PER_TEAM
         )
 
-    # --------------------------------------------------------
-    # Starting XI rules for each GW
-    # --------------------------------------------------------
-
     for gw in gameweeks:
-
         for p in players:
             model += (
                 start[
@@ -272,7 +404,6 @@ def solve_wildcard(
             minimum,
             maximum,
         ) in XI_BOUNDS.items():
-
             pos_players = [
                 p for p in players
                 if row.loc[
@@ -299,11 +430,9 @@ def solve_wildcard(
                 expr <= maximum
             )
 
-    solver = (
-        pulp.PULP_CBC_CMD(
-            msg=False,
-            timeLimit=60,
-        )
+    solver = pulp.PULP_CBC_CMD(
+        msg=False,
+        timeLimit=60,
     )
 
     model.solve(
@@ -341,7 +470,6 @@ def solve_wildcard(
     ] = 0
 
     for gw in gameweeks:
-
         selected[
             f"start_gw{gw}"
         ] = (
@@ -361,8 +489,7 @@ def solve_wildcard(
                         )
                         > 0.5
                     )
-                    for p
-                    in selected_ids
+                    for p in selected_ids
                 }
             )
         )
@@ -378,13 +505,26 @@ def solve_wildcard(
     lineup_rows = []
 
     for gw in gameweeks:
-
         for p in selected_ids:
+            scenario_xp = (
+                row.loc[
+                    p,
+                    f"scenario_xp_gw{gw}",
+                ]
+            )
+            base_xp = (
+                row.loc[
+                    p,
+                    f"xp_gw{gw}",
+                ]
+            )
 
             lineup_rows.append(
                 {
-                    "gameweek": gw,
-                    "player_code": p,
+                    "gameweek":
+                        gw,
+                    "player_code":
+                        p,
                     "web_name":
                         row.loc[
                             p,
@@ -405,11 +545,15 @@ def solve_wildcard(
                             p,
                             "price",
                         ],
+                    "base_xp":
+                        base_xp,
                     "xp":
-                        row.loc[
-                            p,
-                            f"xp_gw{gw}",
-                        ],
+                        scenario_xp,
+                    "fixture_uplift":
+                        (
+                            scenario_xp
+                            - base_xp
+                        ),
                     "xmins":
                         row.loc[
                             p,
@@ -437,19 +581,21 @@ def solve_wildcard(
     return {
         "squad": selected,
         "lineups": lineups,
+        "scored_pool": pool.reset_index(
+            drop=True
+        ),
         "status": status,
-        "objective_value":
-            float(
-                pulp.value(
-                    model.objective
-                )
-            ),
-        "total_cost":
-            float(
-                selected[
-                    "price"
-                ]
-                .sum()
-            ),
+        "objective_value": float(
+            pulp.value(
+                model.objective
+            )
+        ),
+        "total_cost": float(
+            selected["price"]
+            .sum()
+        ),
         "gameweeks": gameweeks,
+        "fixture_sensitivity": float(
+            fixture_sensitivity
+        ),
     }
