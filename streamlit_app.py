@@ -1036,7 +1036,7 @@ with tab_wildcard:
     st.dataframe(
         styled_matrix,
         use_container_width=True,
-        height=650,
+        height=600,
     )
 
     # ========================================================
