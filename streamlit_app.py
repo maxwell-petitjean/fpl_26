@@ -550,6 +550,7 @@ with tab_pool:
         view[display_columns],
         use_container_width=True,
         hide_index=True,
+        height=600,
         column_order=solver_default_columns,
         column_config={
             "price":
