@@ -515,6 +515,18 @@ with tab_pool:
         "solver_eligible",
     ]
 
+    solver_default_columns = [
+        "web_name",
+        "position",
+        "team_name",
+        "price",
+        "model_xpp90_8gw",
+        "fixture_xpp90_full_8gw",
+        "xmins_next_gw",
+        "xp_next_gw",
+        "xp_8gw",
+    ]
+
     display_columns = [
         c for c in preferred_columns
         if c in view.columns
@@ -538,6 +550,7 @@ with tab_pool:
         view[display_columns],
         use_container_width=True,
         hide_index=True,
+        column_order=solver_default_columns,
         column_config={
             "price":
                 st.column_config.NumberColumn(
@@ -1081,7 +1094,6 @@ with tab_wildcard:
                             "price",
                             "scenario_xp_next_gw",
                             "scenario_xp_8gw",
-                            "scenario_weighted_xp_8gw",
                             "scenario_fixture_uplift_8gw",
                         ]
                         if c
@@ -1116,11 +1128,6 @@ with tab_wildcard:
                     "scenario_xp_8gw":
                         st.column_config.NumberColumn(
                             "8GW xP",
-                            format="%.2f",
-                        ),
-                    "scenario_weighted_xp_8gw":
-                        st.column_config.NumberColumn(
-                            "Wtd xP",
                             format="%.2f",
                         ),
                     "scenario_fixture_uplift_8gw":
@@ -1160,7 +1167,7 @@ with tab_wildcard:
                 )
             ]
             .sort_values(
-                "scenario_weighted_xp_8gw",
+                "scenario_xp_8gw",
                 ascending=False,
             )
         )
@@ -1179,7 +1186,6 @@ with tab_wildcard:
                         "price",
                         "scenario_xp_next_gw",
                         "scenario_xp_8gw",
-                        "scenario_weighted_xp_8gw",
                         "scenario_fixture_uplift_8gw",
                         "starts",
                     ]
