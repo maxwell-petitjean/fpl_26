@@ -8,6 +8,19 @@ from src.app.data import load_solver_pool
 from src.app.wildcard import solve_wildcard
 
 
+@st.cache_data(
+    show_spinner="Optimising squad..."
+)
+def solve_wildcard_cached(
+    solver_pool,
+    model_bias,
+):
+    return solve_wildcard(
+        solver_pool,
+        model_bias=model_bias,
+    )
+
+
 
 # ============================================================
 # FIXTURE STRENGTH DATA
@@ -54,7 +67,8 @@ def load_fixture_strength_data():
             team_name,
             opponent_team_name,
             home_away,
-            fixture_label
+            fixture_label,
+            opponent_is_promoted
         FROM `mptestproject-489015.fpl.predictions`
         WHERE gameweek IS NOT NULL
     ),
@@ -77,6 +91,17 @@ def load_fixture_strength_data():
                 kickoff_time DESC,
                 gameweek DESC
         ) = 1
+    ),
+
+    position_group_average AS (
+        SELECT
+            position_group,
+            AVG(core_points_avg_l3) AS avg_core_points_avg_l3,
+            AVG(core_points_avg_l6) AS avg_core_points_avg_l6,
+            AVG(core_points_avg_l12) AS avg_core_points_avg_l12
+        FROM latest_strength
+        GROUP BY
+            position_group
     )
 
     SELECT
@@ -87,15 +112,48 @@ def load_fixture_strength_data():
         f.opponent_team_name,
         f.home_away,
         f.fixture_label,
-        s.position_group,
-        s.core_points_avg_l3,
-        s.core_points_avg_l6,
-        s.core_points_avg_l12
+        f.opponent_is_promoted,
+        position_group,
+
+        CASE
+            WHEN f.opponent_is_promoted
+                THEN a.avg_core_points_avg_l3
+            ELSE s.core_points_avg_l3
+        END AS core_points_avg_l3,
+
+        CASE
+            WHEN f.opponent_is_promoted
+                THEN a.avg_core_points_avg_l6
+            ELSE s.core_points_avg_l6
+        END AS core_points_avg_l6,
+
+        CASE
+            WHEN f.opponent_is_promoted
+                THEN a.avg_core_points_avg_l12
+            ELSE s.core_points_avg_l12
+        END AS core_points_avg_l12,
+
+        CASE
+            WHEN f.opponent_is_promoted
+                THEN 'promoted_league_average'
+            WHEN s.opponent_team_name IS NOT NULL
+                THEN 'team_history'
+            ELSE 'missing'
+        END AS strength_source
+
     FROM future_fixtures f
-    CROSS JOIN UNNEST(['GK', 'DEF', 'ATT']) AS position_group
+
+    CROSS JOIN UNNEST(
+        ['GK', 'DEF', 'ATT']
+    ) AS position_group
+
     LEFT JOIN latest_strength s
         ON f.opponent_team_name = s.opponent_team_name
        AND position_group = s.position_group
+
+    LEFT JOIN position_group_average a
+        ON position_group = a.position_group
+
     ORDER BY
         f.gameweek,
         f.team_name,
@@ -157,17 +215,39 @@ def build_fixture_matrix(
     )
 
     # Short display label while keeping the real team name.
+    view["opponent_label"] = (
+        view["opponent_team_name"]
+    )
+
+    promoted_mask = (
+        view["strength_source"]
+        .eq(
+            "promoted_league_average"
+        )
+    )
+
+    view.loc[
+        promoted_mask,
+        "opponent_label",
+    ] = (
+        view.loc[
+            promoted_mask,
+            "opponent_team_name",
+        ]
+        + "*"
+    )
+
     view["cell"] = np.where(
         view["score"].notna(),
         (
-            view["opponent_team_name"]
+            view["opponent_label"]
             + " "
             + view["score"].map(
                 lambda x: f"{x:.2f}"
             )
         ),
         (
-            view["opponent_team_name"]
+            view["opponent_label"]
             + " —"
         ),
     )
@@ -556,7 +636,6 @@ with tab_pool:
         view[display_columns],
         width="stretch",
         hide_index=True,
-        height=600,
         column_order=solver_default_columns,
         column_config={
             "price":
@@ -737,7 +816,9 @@ with tab_fixtures:
                 "core points allowed per meaningful appearance. "
                 "Darker green means the opponent has allowed "
                 "more points to that position group. "
-                "Grey means no historic strength value is available."
+                "* Newly promoted opponents use the current "
+                "position-group league average because no comparable "
+                "Premier League history is available."
             )
 
 # ============================================================
@@ -761,20 +842,81 @@ with tab_wildcard:
         "### Scoring strategy"
     )
 
-    model_bias_pct = st.slider(
-        "Model bias",
-        min_value=-100,
-        max_value=125,
-        value=0,
-        step=5,
-        format="%d%%",
-        help=(
-            "0% = canonical model. "
-            "Move left to pull predictions towards each player's "
-            "long-run L38 core xPP90. "
-            "Move right to add extra fixture emphasis for DEF and MID. "
-            "Positive settings do not change GK or FWD."
-        ),
+    if (
+        "applied_model_bias_pct"
+        not in st.session_state
+    ):
+        st.session_state[
+            "applied_model_bias_pct"
+        ] = 0
+
+    with st.form(
+        "scoring_strategy_form"
+    ):
+
+        selected_model_bias_pct = (
+            st.slider(
+                "Model bias",
+                min_value=-100,
+                max_value=125,
+                value=st.session_state[
+                    "applied_model_bias_pct"
+                ],
+                step=5,
+                format="%d%%",
+                help=(
+                    "0% = canonical model. "
+                    "Move left to pull predictions towards each player's "
+                    "long-run L38 core xPP90. "
+                    "Move right to add extra fixture emphasis for DEF and MID. "
+                    "Positive settings do not change GK or FWD."
+                ),
+            )
+        )
+
+        bias_left, bias_mid, bias_right = (
+            st.columns(
+                [1, 1, 1]
+            )
+        )
+
+        with bias_left:
+            st.caption(
+                "← **Revert to mean**  \n"
+                "Long-run L38 xPP90"
+            )
+
+        with bias_mid:
+            st.caption(
+                "**Model**  \n"
+                "Canonical prediction"
+            )
+
+        with bias_right:
+            st.caption(
+                "**Chase fixtures →**  \n"
+                "Extra DEF/MID fixture emphasis"
+            )
+
+        run_solver = (
+            st.form_submit_button(
+                "Run optimisation",
+                type="primary",
+                width="stretch",
+            )
+        )
+
+    if run_solver:
+        st.session_state[
+            "applied_model_bias_pct"
+        ] = (
+            selected_model_bias_pct
+        )
+
+    model_bias_pct = (
+        st.session_state[
+            "applied_model_bias_pct"
+        ]
     )
 
     model_bias = (
@@ -782,49 +924,25 @@ with tab_wildcard:
         / 100
     )
 
-    bias_left, bias_mid, bias_right = st.columns(
-        [1, 1, 1]
-    )
-
-    with bias_left:
-        st.caption(
-            "← **Revert to mean**  \n"
-            "Long-run L38 xPP90"
-        )
-
-    with bias_mid:
-        st.caption(
-            "**Model**  \n"
-            "Canonical prediction"
-        )
-
-    with bias_right:
-        st.caption(
-            "**Chase fixtures →**  \n"
-            "Extra DEF/MID fixture emphasis"
-        )
-
     if model_bias_pct < 0:
         st.info(
-            f"Predictions are being pulled "
-            f"{abs(model_bias_pct)}% towards each player's "
-            "long-run L38 core xPP90. "
+            f"Current solve: {abs(model_bias_pct)}% towards "
+            "each player's long-run L38 core xPP90. "
             "This applies to all positions."
         )
 
     elif model_bias_pct > 0:
         st.info(
-            f"DEF and MID receive {model_bias_pct}% of the "
-            "additional fixture-strength adjustment. "
-            "GK and FWD remain on canonical model xP."
+            f"Current solve: +{model_bias_pct}% extra fixture emphasis "
+            "for DEF and MID. GK and FWD remain on canonical model xP."
         )
 
     else:
         st.info(
-            "Using the canonical model with no additional scoring bias."
+            "Current solve: canonical model."
         )
 
-    result = solve_wildcard(
+    result = solve_wildcard_cached(
         solver_pool,
         model_bias=model_bias,
     )
@@ -1112,7 +1230,7 @@ with tab_wildcard:
     st.dataframe(
         styled_matrix,
         width="stretch",
-        height=600,
+        height=650,
     )
 
     # ========================================================
