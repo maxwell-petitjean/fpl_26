@@ -940,8 +940,9 @@ with tab_wildcard:
     ):
 
         styles = [
-            "",
-            "",
+            "",  # web_name
+            "",  # position
+            "",  # price
         ]
 
         player_code = (
