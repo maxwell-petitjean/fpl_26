@@ -139,10 +139,22 @@ def _add_fixture_scenario_fields(
         FIXTURE_WEIGHTS,
     )
 
+    # --------------------------------------------------------
+    # FIXTURE BENCHMARK GRAIN
+    #
+    # A fixture has two opponent perspectives:
+    #   Team A players -> Team B
+    #   Team B players -> Team A
+    #
+    # Therefore the benchmark grain must retain opponent_team_id.
+    # Otherwise one side of each fixture is arbitrarily dropped.
+    # --------------------------------------------------------
+
     fixture_benchmark = (
         out[
             [
                 "fixture_id",
+                "opponent_team_id",
                 "position_group",
                 "opponent_points_allowed",
             ]
@@ -150,6 +162,7 @@ def _add_fixture_scenario_fields(
         .drop_duplicates(
             [
                 "fixture_id",
+                "opponent_team_id",
                 "position_group",
             ]
         )
