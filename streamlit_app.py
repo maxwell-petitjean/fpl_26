@@ -514,14 +514,10 @@ with tab_wildcard:
     )
 
     threats = (
-        solver_pool[
-            ~solver_pool[
-                "player_code"
-            ]
+        scored_pool[
+            ~scored_pool["player_code"]
             .astype(int)
-            .isin(
-                selected_codes
-            )
+            .isin(selected_codes)
         ]
         .copy()
     )
@@ -663,7 +659,7 @@ with tab_wildcard:
                 )
             ]
             .sort_values(
-                "weighted_xp_8gw",
+                "scenario_weighted_xp_8gw"
                 ascending=False,
             )
         )
