@@ -226,12 +226,41 @@ with tab_wildcard:
         "Uses the canonical model xP."
     )
 
+    st.markdown(
+        "### Fixture strategy"
+    )
+    
+    fixture_sensitivity_pct = st.slider(
+        "Fixture sensitivity",
+        min_value=0,
+        max_value=125,
+        value=90,
+        step=5,
+        help=(
+            "0% = canonical model. "
+            "100% = full fixture adjustment. "
+            "Only defenders and midfielders are affected."
+        ),
+    )
+    
+    fixture_sensitivity = (
+        fixture_sensitivity_pct
+        / 100
+    )
+    
+    st.caption(
+        "Backtesting favoured a strong fixture adjustment. "
+        "Only DEF and MID are affected; GK and FWD remain unchanged."
+    )
+
     result = solve_wildcard(
-        solver_pool
+        solver_pool,
+        fixture_sensitivity=fixture_sensitivity,
     )
 
     squad = result["squad"]
     lineups = result["lineups"]
+    scored_pool = result["scored_pool"]
 
     # ========================================================
     # SUMMARY CARDS
@@ -251,7 +280,7 @@ with tab_wildcard:
 
     m3.metric(
         "8GW squad xP",
-        f"{squad['xp_8gw'].sum():.1f}",
+        f"{squad['scenario_xp_8gw'].sum():.1f}",
     )
 
     m4.metric(
