@@ -1,9 +1,387 @@
 import numpy as np
+import pandas as pd
 import streamlit as st
+from google.cloud import bigquery
+from google.oauth2 import service_account
 
 from src.app.data import load_solver_pool
 from src.app.wildcard import solve_wildcard
 
+
+
+# ============================================================
+# FIXTURE STRENGTH DATA
+# ============================================================
+
+@st.cache_resource
+def get_bq_client():
+    """
+    Reuse the same Streamlit service-account secret already
+    used for the deployed app.
+
+    Expected Streamlit secret:
+        [gcp_service_account]
+    """
+
+    credentials = service_account.Credentials.from_service_account_info(
+        dict(st.secrets["gcp_service_account"])
+    )
+
+    return bigquery.Client(
+        credentials=credentials,
+        project=credentials.project_id,
+    )
+
+
+@st.cache_data(ttl=3600)
+def load_fixture_strength_data():
+    """
+    Build one row per upcoming team fixture and attach the latest
+    available opponent-strength snapshot for GK / DEF / ATT.
+
+    The historic opponent_strength table is used only to obtain the
+    latest trailing L3 / L6 / L12 values for each opponent.
+    """
+
+    client = get_bq_client()
+
+    sql = """
+    WITH future_fixtures AS (
+        SELECT DISTINCT
+            season,
+            gameweek,
+            fixture_id,
+            team_name,
+            opponent_team_name,
+            home_away,
+            fixture_label
+        FROM `mptestproject-489015.fpl.predictions`
+        WHERE gameweek IS NOT NULL
+    ),
+
+    latest_strength AS (
+        SELECT
+            current_opponent_team_name AS opponent_team_name,
+            position_group,
+            core_points_avg_l3,
+            core_points_avg_l6,
+            core_points_avg_l12
+        FROM `mptestproject-489015.fpl.opponent_strength`
+        WHERE current_opponent_team_name IS NOT NULL
+          AND position_group IN ('GK', 'DEF', 'ATT')
+        QUALIFY ROW_NUMBER() OVER (
+            PARTITION BY
+                current_opponent_team_name,
+                position_group
+            ORDER BY
+                kickoff_time DESC,
+                gameweek DESC
+        ) = 1
+    )
+
+    SELECT
+        f.season,
+        f.gameweek,
+        f.fixture_id,
+        f.team_name,
+        f.opponent_team_name,
+        f.home_away,
+        f.fixture_label,
+        s.position_group,
+        s.core_points_avg_l3,
+        s.core_points_avg_l6,
+        s.core_points_avg_l12
+    FROM future_fixtures f
+    CROSS JOIN UNNEST(['GK', 'DEF', 'ATT']) AS position_group
+    LEFT JOIN latest_strength s
+        ON f.opponent_team_name = s.opponent_team_name
+       AND position_group = s.position_group
+    ORDER BY
+        f.gameweek,
+        f.team_name,
+        f.fixture_id,
+        position_group
+    """
+
+    return (
+        client.query(sql)
+        .to_dataframe(
+            create_bqstorage_client=False
+        )
+    )
+
+
+def build_fixture_matrix(
+    fixture_data: pd.DataFrame,
+    position_group: str,
+    lookback: int,
+):
+    """
+    Return:
+      display_matrix: opponent + score text
+      score_matrix: numeric matrix used for heatmap colouring
+
+    DGWs are retained by joining multiple opponents in the same cell.
+    """
+
+    score_col = (
+        f"core_points_avg_l{lookback}"
+    )
+
+    view = (
+        fixture_data[
+            fixture_data[
+                "position_group"
+            ].eq(position_group)
+        ]
+        .copy()
+    )
+
+    view["gameweek"] = pd.to_numeric(
+        view["gameweek"],
+        errors="coerce",
+    )
+
+    view = view[
+        view["gameweek"].notna()
+    ].copy()
+
+    view["gameweek"] = (
+        view["gameweek"]
+        .astype(int)
+    )
+
+    view["score"] = pd.to_numeric(
+        view[score_col],
+        errors="coerce",
+    )
+
+    # Short display label while keeping the real team name.
+    view["cell"] = np.where(
+        view["score"].notna(),
+        (
+            view["opponent_team_name"]
+            + " "
+            + view["score"].map(
+                lambda x: f"{x:.2f}"
+            )
+        ),
+        (
+            view["opponent_team_name"]
+            + " —"
+        ),
+    )
+
+    # Supports DGWs without assuming they will not occur.
+    display_long = (
+        view.groupby(
+            [
+                "team_name",
+                "gameweek",
+            ],
+            as_index=False,
+        )
+        .agg(
+            cell=(
+                "cell",
+                " / ".join,
+            )
+        )
+    )
+
+    score_long = (
+        view.groupby(
+            [
+                "team_name",
+                "gameweek",
+            ],
+            as_index=False,
+        )
+        .agg(
+            score=(
+                "score",
+                "mean",
+            )
+        )
+    )
+
+    display_matrix = (
+        display_long
+        .pivot(
+            index="team_name",
+            columns="gameweek",
+            values="cell",
+        )
+    )
+
+    score_matrix = (
+        score_long
+        .pivot(
+            index="team_name",
+            columns="gameweek",
+            values="score",
+        )
+    )
+
+    gameweeks = sorted(
+        set(
+            display_matrix.columns
+        )
+    )
+
+    display_matrix = (
+        display_matrix
+        .reindex(
+            columns=gameweeks
+        )
+        .sort_index()
+    )
+
+    score_matrix = (
+        score_matrix
+        .reindex(
+            index=display_matrix.index,
+            columns=gameweeks,
+        )
+    )
+
+    display_matrix.columns = [
+        f"GW{gw}"
+        for gw in gameweeks
+    ]
+
+    score_matrix.columns = (
+        display_matrix.columns
+    )
+
+    display_matrix.index.name = (
+        "Team"
+    )
+
+    return (
+        display_matrix,
+        score_matrix,
+    )
+
+
+def style_fixture_matrix(
+    display_matrix: pd.DataFrame,
+    score_matrix: pd.DataFrame,
+):
+    """
+    Darker green = opponent has allowed more core FPL points
+    to the selected position group = more attractive fixture.
+    """
+
+    all_scores = (
+        score_matrix
+        .stack()
+        .dropna()
+    )
+
+    if all_scores.empty:
+        return (
+            display_matrix
+            .style
+        )
+
+    vmin = float(
+        all_scores.min()
+    )
+
+    vmax = float(
+        all_scores.max()
+    )
+
+    def colour_cell(
+        value,
+        row_name,
+        col_name,
+    ):
+        score = (
+            score_matrix.loc[
+                row_name,
+                col_name,
+            ]
+        )
+
+        if pd.isna(score):
+            return (
+                "background-color: #eeeeee; "
+                "color: #777777;"
+            )
+
+        if vmax <= vmin:
+            strength = 0.5
+        else:
+            strength = (
+                float(score) - vmin
+            ) / (
+                vmax - vmin
+            )
+
+        # Deliberately simple custom green scale so this does not
+        # depend on pandas Styler's matplotlib gradient support.
+        light = np.array(
+            [232, 245, 233]
+        )
+        dark = np.array(
+            [27, 94, 32]
+        )
+
+        rgb = (
+            light
+            + strength
+            * (
+                dark - light
+            )
+        ).astype(int)
+
+        text_colour = (
+            "#ffffff"
+            if strength >= 0.58
+            else "#111111"
+        )
+
+        return (
+            f"background-color: "
+            f"rgb({rgb[0]}, {rgb[1]}, {rgb[2]}); "
+            f"color: {text_colour}; "
+            "font-weight: 650;"
+        )
+
+    styles = pd.DataFrame(
+        "",
+        index=display_matrix.index,
+        columns=display_matrix.columns,
+    )
+
+    for row_name in (
+        display_matrix.index
+    ):
+        for col_name in (
+            display_matrix.columns
+        ):
+            styles.loc[
+                row_name,
+                col_name,
+            ] = colour_cell(
+                display_matrix.loc[
+                    row_name,
+                    col_name,
+                ],
+                row_name,
+                col_name,
+            )
+
+    return (
+        display_matrix
+        .style
+        .apply(
+            lambda _: styles,
+            axis=None,
+        )
+    )
 
 st.set_page_config(
     page_title="FPL Solver",
@@ -24,9 +402,10 @@ if solver_pool.empty:
     )
     st.stop()
 
-tab_pool, tab_wildcard = st.tabs(
+tab_pool, tab_fixtures, tab_wildcard = st.tabs(
     [
         "Player pool",
+        "Fixture strength",
         "Optimal wildcard",
     ]
 )
@@ -208,6 +587,118 @@ with tab_pool:
         },
     )
 
+
+
+# ============================================================
+# FIXTURE STRENGTH
+# ============================================================
+
+with tab_fixtures:
+
+    st.subheader(
+        "Fixture strength"
+    )
+
+    st.caption(
+        "Upcoming fixtures scored by how many core FPL points "
+        "the opponent has recently allowed to the selected "
+        "position group. Higher = more attractive fixture."
+    )
+
+    fixture_data = (
+        load_fixture_strength_data()
+    )
+
+    if fixture_data.empty:
+        st.info(
+            "No upcoming fixture-strength data found."
+        )
+    else:
+
+        f1, f2 = st.columns(
+            [1, 1]
+        )
+
+        with f1:
+            fixture_position = (
+                st.segmented_control(
+                    "Position group",
+                    options=[
+                        "GK",
+                        "DEF",
+                        "ATT",
+                    ],
+                    default="ATT",
+                    key=(
+                        "fixture_position_group"
+                    ),
+                )
+            )
+
+        with f2:
+            fixture_lookback = (
+                st.segmented_control(
+                    "Lookback",
+                    options=[
+                        3,
+                        6,
+                        12,
+                    ],
+                    default=6,
+                    format_func=(
+                        lambda x:
+                        f"Last {x}"
+                    ),
+                    key=(
+                        "fixture_lookback"
+                    ),
+                )
+            )
+
+        if fixture_position is None:
+            fixture_position = "ATT"
+
+        if fixture_lookback is None:
+            fixture_lookback = 6
+
+        display_matrix, score_matrix = (
+            build_fixture_matrix(
+                fixture_data,
+                position_group=(
+                    fixture_position
+                ),
+                lookback=int(
+                    fixture_lookback
+                ),
+            )
+        )
+
+        if display_matrix.empty:
+            st.info(
+                "No fixture-strength values "
+                "for this selection."
+            )
+        else:
+            styled_fixtures = (
+                style_fixture_matrix(
+                    display_matrix,
+                    score_matrix,
+                )
+            )
+
+            st.dataframe(
+                styled_fixtures,
+                width="stretch",
+                height=760,
+            )
+
+            st.caption(
+                "Cell = upcoming opponent + trailing average "
+                "core points allowed per meaningful appearance. "
+                "Darker green means the opponent has allowed "
+                "more points to that position group. "
+                "Grey means no historic strength value is available."
+            )
 
 # ============================================================
 # OPTIMAL WILDCARD
