@@ -874,6 +874,22 @@ with tab_wildcard:
         ]
         .sum()
     )
+    
+    # Total xP across all gameweeks
+    xp_total = (
+        lineup_matrix
+        .groupby(
+            "player_code"
+        )["xp"]
+        .sum()
+    )
+    
+    # xP left on the bench
+    bench_total = (
+        xp_total
+        - starter_total
+    )
+
 
     matrix = (
         base
@@ -897,7 +913,19 @@ with tab_wildcard:
     matrix[
         "Total"
     ] = (
+        xp_total
+    )
+    
+    matrix[
+        "Starting"
+    ] = (
         starter_total
+    )
+    
+    matrix[
+        "Bench"
+    ] = (
+        bench_total
     )
 
     position_order = {
@@ -970,8 +998,12 @@ with tab_wildcard:
                     "font-weight: 500;"
                 )
 
-        styles.append(
-            "font-weight: 700;"
+        styles.extend(
+            [
+                "font-weight: 700;",  # Total
+                "font-weight: 700;",  # Starting
+                "color: #777777;",    # Bench
+            ]
         )
 
         return styles
@@ -995,6 +1027,8 @@ with tab_wildcard:
                     for gw in gameweeks
                 },
                 "Total": "{:.2f}",
+                "Starting": "{:.2f}",
+                "Bench": "{:.2f}",
             }
         )
     )
