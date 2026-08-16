@@ -1111,7 +1111,7 @@ with tab_wildcard:
     st.dataframe(
         styled_matrix,
         width="stretch",
-        height=650,
+        height=600,
     )
 
     # ========================================================
@@ -1232,6 +1232,7 @@ with tab_wildcard:
                 pos_threats,
                 hide_index=True,
                 width="stretch",
+                height=600,
                 column_order=threat_default_columns,
                 column_config={
                     "web_name":
