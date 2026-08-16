@@ -737,7 +737,7 @@ with tab_wildcard:
         "Fixture sensitivity",
         min_value=0,
         max_value=125,
-        value=90,
+        value=10,
         step=5,
         help=(
             "0% = canonical model. "
@@ -838,6 +838,7 @@ with tab_wildcard:
                 "player_code",
                 "web_name",
                 "position",
+                "price",
             ]
         ]
         .drop_duplicates(
