@@ -227,6 +227,57 @@ def _add_fixture_scenario_fields(
         / 90
     )
 
+    # --------------------------------------------------------
+    # MEAN-REVERSION VIEW
+    #
+    # Full left-hand slider anchor:
+    # player long-run L38 core PP90.
+    #
+    # Missing L38 falls back to the canonical model, so new /
+    # low-history players are neutral rather than dropped.
+    # Applies to ALL positions.
+    # --------------------------------------------------------
+
+    if "player_core_pp90_l38" in out.columns:
+        out["mean_reversion_xpp90"] = pd.to_numeric(
+            out["player_core_pp90_l38"],
+            errors="coerce",
+        )
+    else:
+        out["mean_reversion_xpp90"] = np.nan
+
+    out["mean_reversion_xpp90"] = (
+        out["mean_reversion_xpp90"]
+        .fillna(
+            out["predicted_core_pp90"]
+        )
+    )
+
+    out["mean_reversion_xpp90_delta"] = (
+        out["mean_reversion_xpp90"]
+        - out["predicted_core_pp90"]
+    )
+
+    out["mean_reversion_core_xp"] = (
+        out["mean_reversion_xpp90"]
+        * mins
+        / 90
+    )
+
+    # Preserve DefCon / any other non-core component in canonical xp.
+    out["mean_reversion_xp"] = (
+        out["xp"]
+        + (
+            out["mean_reversion_core_xp"]
+            - out["model_core_xp_calc"]
+        )
+    )
+
+    out["mean_reversion_xp_delta"] = (
+        out["mean_reversion_xp"]
+        - out["xp"]
+    )
+
     out["fixture_full_core_xp"] = (
         out["fixture_full_xpp90"]
         * mins
@@ -387,6 +438,10 @@ def build_solver_pool(
                 "predicted_core_pp90",
                 "mean",
             ),
+            mean_reversion_xpp90_8gw=(
+                "mean_reversion_xpp90",
+                "mean",
+            ),
             fixture_xpp90_full_8gw=(
                 "fixture_full_xpp90",
                 "mean",
@@ -404,6 +459,11 @@ def build_solver_pool(
                 "max",
             ),
         )
+    )
+
+    player_context["mean_reversion_xpp90_delta_8gw"] = (
+        player_context["mean_reversion_xpp90_8gw"]
+        - player_context["model_xpp90_8gw"]
     )
 
     player_context["fixture_xpp90_delta_8gw"] = (
@@ -429,6 +489,10 @@ def build_solver_pool(
         ),
         "xp": (
             "xp",
+            "sum",
+        ),
+        "mean_reversion_xp": (
+            "mean_reversion_xp",
             "sum",
         ),
         "fixture_full_xp": (
@@ -511,6 +575,7 @@ def build_solver_pool(
             "fixtures",
             "xmins",
             "xp",
+            "mean_reversion_xp",
             "fixture_full_xp",
             "core_xp",
             "defcon_xp",
@@ -564,6 +629,36 @@ def build_solver_pool(
         for gw in gameweeks
     )
 
+    # --------------------------------------------------------
+    # FULL MEAN-REVERSION TOTALS
+    # --------------------------------------------------------
+
+    pool["mean_reversion_xp_8gw"] = sum(
+        pool[
+            f"mean_reversion_xp_gw{gw}"
+        ]
+        for gw in gameweeks
+    )
+
+    pool[
+        "mean_reversion_weighted_xp_8gw"
+    ] = sum(
+        pool[
+            f"mean_reversion_xp_gw{gw}"
+        ]
+        * gw_weight_map[gw]
+        for gw in gameweeks
+    )
+
+    pool["mean_reversion_uplift_8gw"] = (
+        pool["mean_reversion_xp_8gw"]
+        - pool["xp_8gw"]
+    )
+
+    # --------------------------------------------------------
+    # FULL FIXTURE TOTALS
+    # --------------------------------------------------------
+
     pool["fixture_full_xp_8gw"] = sum(
         pool[
             f"fixture_full_xp_gw{gw}"
@@ -608,6 +703,12 @@ def build_solver_pool(
     pool["xp_next_gw"] = (
         pool[
             f"xp_gw{first_gw}"
+        ]
+    )
+
+    pool["mean_reversion_xp_next_gw"] = (
+        pool[
+            f"mean_reversion_xp_gw{first_gw}"
         ]
     )
 
@@ -762,7 +863,7 @@ def build_solver_pool(
     )
     print(
         "Canonical xp unchanged; "
-        "full fixture scenario added."
+        "mean-reversion and full-fixture anchors added."
     )
 
     return {
