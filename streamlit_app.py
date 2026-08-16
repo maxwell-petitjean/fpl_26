@@ -507,6 +507,10 @@ with tab_pool:
         "xp_8gw",
         "weighted_xp_8gw",
         "model_xpp90_8gw",
+        "mean_reversion_xpp90_8gw",
+        "mean_reversion_xpp90_delta_8gw",
+        "mean_reversion_xp_8gw",
+        "mean_reversion_uplift_8gw",
         "fixture_xpp90_full_8gw",
         "fixture_xpp90_delta_8gw",
         "fixture_full_xp_8gw",
@@ -515,21 +519,23 @@ with tab_pool:
         "solver_eligible",
     ]
 
-    solver_default_columns = [
-        "web_name",
-        "position",
-        "team_name",
-        "price",
-        "model_xpp90_8gw",
-        "fixture_xpp90_full_8gw",
-        "xmins_next_gw",
-        "xp_next_gw",
-        "xp_8gw",
-    ]
-
     display_columns = [
         c for c in preferred_columns
         if c in view.columns
+    ]
+
+    solver_default_columns = [
+        c for c in [
+            "web_name",
+            "position",
+            "team_name",
+            "price",
+            "xmins_next_gw",
+            "xp_next_gw",
+            "xp_8gw",
+            "weighted_xp_8gw",
+        ]
+        if c in display_columns
     ]
 
     sort_col = (
@@ -548,9 +554,8 @@ with tab_pool:
 
     st.dataframe(
         view[display_columns],
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
-        height=600,
         column_order=solver_default_columns,
         column_config={
             "price":
@@ -577,6 +582,26 @@ with tab_pool:
                 st.column_config.NumberColumn(
                     "Model xPP90",
                     format="%.2f",
+                ),
+            "mean_reversion_xpp90_8gw":
+                st.column_config.NumberColumn(
+                    "L38 xPP90",
+                    format="%.2f",
+                ),
+            "mean_reversion_xpp90_delta_8gw":
+                st.column_config.NumberColumn(
+                    "L38 Δ xPP90",
+                    format="%+.2f",
+                ),
+            "mean_reversion_xp_8gw":
+                st.column_config.NumberColumn(
+                    "L38 8GW xP",
+                    format="%.2f",
+                ),
+            "mean_reversion_uplift_8gw":
+                st.column_config.NumberColumn(
+                    "L38 Δ xP",
+                    format="%+.2f",
                 ),
             "fixture_xpp90_full_8gw":
                 st.column_config.NumberColumn(
@@ -726,40 +751,81 @@ with tab_wildcard:
 
     st.caption(
         "Independent of your current FPL team. "
-        "Fixture sensitivity can tilt DEF and MID toward favourable fixtures; "
-        "GK and FWD remain on canonical model xP."
+        "0% uses the canonical model. Move left to pull scoring "
+        "towards long-run player ability; move right to place extra "
+        "emphasis on favourable fixtures."
     )
 
     st.markdown(
-        "### Fixture strategy"
+        "### Scoring strategy"
     )
-    
-    fixture_sensitivity_pct = st.slider(
-        "Fixture sensitivity",
-        min_value=0,
+
+    model_bias_pct = st.slider(
+        "Model bias",
+        min_value=-100,
         max_value=125,
-        value=10,
+        value=0,
         step=5,
+        format="%d%%",
         help=(
             "0% = canonical model. "
-            "100% = full fixture adjustment. "
-            "Only defenders and midfielders are affected."
+            "Move left to pull predictions towards each player's "
+            "long-run L38 core xPP90. "
+            "Move right to add extra fixture emphasis for DEF and MID. "
+            "Positive settings do not change GK or FWD."
         ),
     )
-    
-    fixture_sensitivity = (
-        fixture_sensitivity_pct
+
+    model_bias = (
+        model_bias_pct
         / 100
     )
-    
-    st.caption(
-        "Backtesting favoured a strong fixture adjustment. "
-        "Only DEF and MID are affected; GK and FWD remain unchanged."
+
+    bias_left, bias_mid, bias_right = st.columns(
+        [1, 1, 1]
     )
+
+    with bias_left:
+        st.caption(
+            "← **Revert to mean**  \n"
+            "Long-run L38 xPP90"
+        )
+
+    with bias_mid:
+        st.caption(
+            "**Model**  \n"
+            "Canonical prediction"
+        )
+
+    with bias_right:
+        st.caption(
+            "**Chase fixtures →**  \n"
+            "Extra DEF/MID fixture emphasis"
+        )
+
+    if model_bias_pct < 0:
+        st.info(
+            f"Predictions are being pulled "
+            f"{abs(model_bias_pct)}% towards each player's "
+            "long-run L38 core xPP90. "
+            "This applies to all positions."
+        )
+
+    elif model_bias_pct > 0:
+        st.info(
+            f"DEF and MID receive {model_bias_pct}% of the "
+            "additional fixture-strength adjustment. "
+            "GK and FWD remain on canonical model xP."
+        )
+
+    else:
+        st.info(
+            "Using the canonical model with no additional scoring bias."
+        )
 
     result = solve_wildcard(
         solver_pool,
-        fixture_sensitivity=fixture_sensitivity,
+        model_bias=model_bias,
     )
 
     squad = result["squad"]
@@ -792,9 +858,20 @@ with tab_wildcard:
         f"{result['objective_value']:.1f}",
     )
 
+    if model_bias_pct < 0:
+        bias_label = (
+            f"Mean {model_bias_pct}%"
+        )
+    elif model_bias_pct > 0:
+        bias_label = (
+            f"Fixtures +{model_bias_pct}%"
+        )
+    else:
+        bias_label = "Model"
+
     m5.metric(
-        "Fixture sensitivity",
-        f"{fixture_sensitivity_pct}%",
+        "Scoring bias",
+        bias_label,
     )
 
     # ========================================================
@@ -875,22 +952,6 @@ with tab_wildcard:
         ]
         .sum()
     )
-    
-    # Total xP across all gameweeks
-    xp_total = (
-        lineup_matrix
-        .groupby(
-            "player_code"
-        )["xp"]
-        .sum()
-    )
-    
-    # xP left on the bench
-    bench_total = (
-        xp_total
-        - starter_total
-    )
-
 
     matrix = (
         base
@@ -911,18 +972,31 @@ with tab_wildcard:
         ]
     ]
 
+    xp_total = (
+        lineup_matrix
+        .groupby(
+            "player_code"
+        )["xp"]
+        .sum()
+    )
+
+    bench_total = (
+        xp_total
+        - starter_total
+    )
+
     matrix[
         "Total"
     ] = (
         xp_total
     )
-    
+
     matrix[
         "Starting"
     ] = (
         starter_total
     )
-    
+
     matrix[
         "Bench"
     ] = (
@@ -1022,11 +1096,11 @@ with tab_wildcard:
         )
         .format(
             {
+                gw: "{:.2f}"
+                for gw in gameweeks
+            }
+            | {
                 "price": "£{:.1f}m",
-                **{
-                    gw: "{:.2f}"
-                    for gw in gameweeks
-                },
                 "Total": "{:.2f}",
                 "Starting": "{:.2f}",
                 "Bench": "{:.2f}",
@@ -1036,8 +1110,8 @@ with tab_wildcard:
 
     st.dataframe(
         styled_matrix,
-        use_container_width=True,
-        height=600,
+        width="stretch",
+        height=650,
     )
 
     # ========================================================
@@ -1133,7 +1207,8 @@ with tab_wildcard:
                             "price",
                             "scenario_xp_next_gw",
                             "scenario_xp_8gw",
-                            "scenario_fixture_uplift_8gw",
+                            "scenario_weighted_xp_8gw",
+                            "scenario_delta_8gw",
                         ]
                         if c
                         in pos_threats.columns
@@ -1141,10 +1216,23 @@ with tab_wildcard:
                 ]
             )
 
+            threat_default_columns = [
+                c for c in [
+                    "web_name",
+                    "team_name",
+                    "price",
+                    "scenario_xp_next_gw",
+                    "scenario_xp_8gw",
+                    "scenario_weighted_xp_8gw",
+                ]
+                if c in pos_threats.columns
+            ]
+
             st.dataframe(
                 pos_threats,
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
+                column_order=threat_default_columns,
                 column_config={
                     "web_name":
                         st.column_config.TextColumn(
@@ -1169,7 +1257,12 @@ with tab_wildcard:
                             "8GW xP",
                             format="%.2f",
                         ),
-                    "scenario_fixture_uplift_8gw":
+                    "scenario_weighted_xp_8gw":
+                        st.column_config.NumberColumn(
+                            "Wtd xP",
+                            format="%.2f",
+                        ),
+                    "scenario_delta_8gw":
                         st.column_config.NumberColumn(
                             "Fixture Δ",
                             format="%+.2f",
@@ -1178,7 +1271,7 @@ with tab_wildcard:
             )
 
     st.caption(
-        "Threat ranking uses the fixture-sensitive weighted xP, "
+        "Threat ranking uses the selected scoring-bias view, "
         "the same scoring view used by the wildcard solver."
     )
 
@@ -1206,7 +1299,7 @@ with tab_wildcard:
                 )
             ]
             .sort_values(
-                "scenario_xp_8gw",
+                "scenario_weighted_xp_8gw",
                 ascending=False,
             )
         )
@@ -1225,12 +1318,13 @@ with tab_wildcard:
                         "price",
                         "scenario_xp_next_gw",
                         "scenario_xp_8gw",
-                        "scenario_fixture_uplift_8gw",
+                        "scenario_weighted_xp_8gw",
+                        "scenario_delta_8gw",
                         "starts",
                     ]
                     if c in pos.columns
                 ]
             ],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
