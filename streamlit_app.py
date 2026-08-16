@@ -40,26 +40,9 @@ with tab_pool:
 
     st.subheader("Solver pool")
 
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric(
-        "Players",
-        f"{len(solver_pool):,}",
-    )
-
-    col2.metric(
-        "Teams",
-        f"{solver_pool['team_name'].nunique():,}",
-    )
-
-    col3.metric(
-        "Avg price",
-        f"£{solver_pool['price'].mean():.1f}m",
-    )
-
-    col4.metric(
-        "Eligible",
-        f"{int(solver_pool['solver_eligible'].sum()):,}",
+    st.caption(
+        "Explore the modelled player pool, expected points and fixture context. "
+        "Use the filters below to compare players before optimisation."
     )
 
     positions = (
@@ -144,11 +127,11 @@ with tab_pool:
         "xp_next_gw",
         "xp_8gw",
         "weighted_xp_8gw",
-        "model_xp_8gw",
-        "form_xp_8gw",
-        "fixture_xp_8gw",
-        "form_uplift_8gw",
-        "fixture_uplift_8gw",
+        "model_xpp90_8gw",
+        "fixture_xpp90_full_8gw",
+        "fixture_xpp90_delta_8gw",
+        "fixture_full_xp_8gw",
+        "fixture_full_uplift_8gw",
         "avg_fixture_multiplier_8gw",
         "solver_eligible",
     ]
@@ -197,15 +180,30 @@ with tab_pool:
                     "Weighted xP",
                     format="%.2f",
                 ),
-            "form_xp_8gw":
+            "model_xpp90_8gw":
                 st.column_config.NumberColumn(
-                    "Form view",
+                    "Model xPP90",
                     format="%.2f",
                 ),
-            "fixture_xp_8gw":
+            "fixture_xpp90_full_8gw":
                 st.column_config.NumberColumn(
-                    "Fixture view",
+                    "Fixture xPP90",
                     format="%.2f",
+                ),
+            "fixture_xpp90_delta_8gw":
+                st.column_config.NumberColumn(
+                    "Fixture Δ xPP90",
+                    format="%+.2f",
+                ),
+            "fixture_full_xp_8gw":
+                st.column_config.NumberColumn(
+                    "Full fixture 8GW xP",
+                    format="%.2f",
+                ),
+            "fixture_full_uplift_8gw":
+                st.column_config.NumberColumn(
+                    "Fixture uplift",
+                    format="%+.2f",
                 ),
         },
     )
@@ -223,7 +221,8 @@ with tab_wildcard:
 
     st.caption(
         "Independent of your current FPL team. "
-        "Uses the canonical model xP."
+        "Fixture sensitivity can tilt DEF and MID toward favourable fixtures; "
+        "GK and FWD remain on canonical model xP."
     )
 
     st.markdown(
@@ -266,7 +265,7 @@ with tab_wildcard:
     # SUMMARY CARDS
     # ========================================================
 
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4, m5 = st.columns(5)
 
     m1.metric(
         "Squad cost",
@@ -286,6 +285,11 @@ with tab_wildcard:
     m4.metric(
         "Objective",
         f"{result['objective_value']:.1f}",
+    )
+
+    m5.metric(
+        "Fixture sensitivity",
+        f"{fixture_sensitivity_pct}%",
     )
 
     # ========================================================
@@ -566,7 +570,7 @@ with tab_wildcard:
                     )
                 ]
                 .sort_values(
-                    "weighted_xp_8gw",
+                    "scenario_weighted_xp_8gw",
                     ascending=False,
                 )
                 .head(
@@ -584,9 +588,10 @@ with tab_wildcard:
                             "web_name",
                             "team_name",
                             "price",
-                            "xp_next_gw",
-                            "xp_8gw",
-                            "weighted_xp_8gw",
+                            "scenario_xp_next_gw",
+                            "scenario_xp_8gw",
+                            "scenario_weighted_xp_8gw",
+                            "scenario_fixture_uplift_8gw",
                         ]
                         if c
                         in pos_threats.columns
@@ -612,27 +617,32 @@ with tab_wildcard:
                             "Price",
                             format="£%.1fm",
                         ),
-                    "xp_next_gw":
+                    "scenario_xp_next_gw":
                         st.column_config.NumberColumn(
                             "xP next",
                             format="%.2f",
                         ),
-                    "xp_8gw":
+                    "scenario_xp_8gw":
                         st.column_config.NumberColumn(
                             "8GW xP",
                             format="%.2f",
                         ),
-                    "weighted_xp_8gw":
+                    "scenario_weighted_xp_8gw":
                         st.column_config.NumberColumn(
                             "Wtd xP",
                             format="%.2f",
+                        ),
+                    "scenario_fixture_uplift_8gw":
+                        st.column_config.NumberColumn(
+                            "Fixture Δ",
+                            format="%+.2f",
                         ),
                 },
             )
 
     st.caption(
-        "Threat ranking uses weighted xP, "
-        "the same objective used by the wildcard solver."
+        "Threat ranking uses the fixture-sensitive weighted xP, "
+        "the same scoring view used by the wildcard solver."
     )
 
     # ========================================================
@@ -659,7 +669,7 @@ with tab_wildcard:
                 )
             ]
             .sort_values(
-                "scenario_weighted_xp_8gw"
+                "scenario_weighted_xp_8gw",
                 ascending=False,
             )
         )
@@ -676,9 +686,10 @@ with tab_wildcard:
                         "web_name",
                         "team_name",
                         "price",
-                        "xp_next_gw",
-                        "xp_8gw",
-                        "weighted_xp_8gw",
+                        "scenario_xp_next_gw",
+                        "scenario_xp_8gw",
+                        "scenario_weighted_xp_8gw",
+                        "scenario_fixture_uplift_8gw",
                         "starts",
                     ]
                     if c in pos.columns
