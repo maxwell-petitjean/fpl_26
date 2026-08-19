@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pulp
 
@@ -199,6 +200,72 @@ def apply_model_bias(
                     ]
                 )
             )
+
+    # --------------------------------------------------------
+    # HARD MODEL-BIAS INVARIANTS
+    #
+    # 0%:
+    #   scenario MUST equal canonical xp exactly.
+    #
+    # -100%:
+    #   scenario MUST equal the mean-reversion anchor exactly.
+    #
+    # +100%:
+    #   DEF/MID MUST equal full fixture xP;
+    #   GK/FWD MUST remain canonical.
+    # --------------------------------------------------------
+
+    if abs(bias) < 1e-12:
+        for gw in gameweeks:
+            if not np.allclose(
+                pool[f"scenario_xp_gw{gw}"].fillna(0),
+                pool[f"xp_gw{gw}"].fillna(0),
+                atol=1e-9,
+                rtol=1e-9,
+            ):
+                raise ValueError(
+                    f"0% model bias invariant failed for GW{gw}."
+                )
+
+    if abs(bias + 1.0) < 1e-12:
+        for gw in gameweeks:
+            if not np.allclose(
+                pool[f"scenario_xp_gw{gw}"].fillna(0),
+                pool[f"mean_reversion_xp_gw{gw}"].fillna(0),
+                atol=1e-9,
+                rtol=1e-9,
+            ):
+                raise ValueError(
+                    f"-100% model bias invariant failed for GW{gw}."
+                )
+
+    if abs(bias - 1.0) < 1e-12:
+        for gw in gameweeks:
+            scenario = pool[f"scenario_xp_gw{gw}"]
+            canonical = pool[f"xp_gw{gw}"]
+            fixture = pool[f"fixture_full_xp_gw{gw}"]
+
+            if not np.allclose(
+                scenario.loc[fixture_mask].fillna(0),
+                fixture.loc[fixture_mask].fillna(0),
+                atol=1e-9,
+                rtol=1e-9,
+            ):
+                raise ValueError(
+                    f"+100% fixture invariant failed for GW{gw}: "
+                    "DEF/MID must equal fixture_full_xp."
+                )
+
+            if not np.allclose(
+                scenario.loc[~fixture_mask].fillna(0),
+                canonical.loc[~fixture_mask].fillna(0),
+                atol=1e-9,
+                rtol=1e-9,
+            ):
+                raise ValueError(
+                    f"+100% fixture invariant failed for GW{gw}: "
+                    "GK/FWD must remain canonical."
+                )
 
     pool[
         "scenario_xp_8gw"
