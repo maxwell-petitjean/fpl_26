@@ -234,10 +234,33 @@ def _add_fixture_scenario_fields(
         errors="coerce",
     ).fillna(0)
 
+    # --------------------------------------------------------
+    # CANONICAL PROJECTION DIAGNOSTICS
+    #
+    # core_projection_90:
+    #   canonical core xP assuming 90 minutes.
+    #
+    # core_projection_xmins:
+    #   canonical core xP after FINAL expected minutes.
+    #
+    # final_predicted_minutes already reflects:
+    #   hybrid/model minutes
+    #   -> availability scaling
+    #   -> manual override as final authority
+    # --------------------------------------------------------
+
+    out["core_projection_90"] = (
+        out["predicted_core_pp90"]
+    )
+
     out["model_core_xp_calc"] = (
         out["predicted_core_pp90"]
         * mins
         / 90
+    )
+
+    out["core_projection_xmins"] = (
+        out["model_core_xp_calc"]
     )
 
     # --------------------------------------------------------
@@ -459,6 +482,10 @@ def build_solver_pool(
                 "fixture_full_xpp90",
                 "mean",
             ),
+            avg_final_predicted_minutes_8gw=(
+                "final_predicted_minutes",
+                "mean",
+            ),
             avg_fixture_multiplier_8gw=(
                 "fixture_multiplier",
                 "mean",
@@ -502,6 +529,14 @@ def build_solver_pool(
         ),
         "xp": (
             "xp",
+            "sum",
+        ),
+        "core_projection_90": (
+            "core_projection_90",
+            "sum",
+        ),
+        "core_projection_xmins": (
+            "core_projection_xmins",
             "sum",
         ),
         "mean_reversion_xp": (
@@ -588,6 +623,8 @@ def build_solver_pool(
             "fixtures",
             "xmins",
             "xp",
+            "core_projection_90",
+            "core_projection_xmins",
             "mean_reversion_xp",
             "fixture_full_xp",
             "core_xp",
@@ -640,6 +677,33 @@ def build_solver_pool(
             f"xmins_gw{gw}"
         ]
         for gw in gameweeks
+    )
+
+    # --------------------------------------------------------
+    # PROJECTION DIAGNOSTICS
+    # --------------------------------------------------------
+
+    pool["core_projection_90_8gw"] = sum(
+        pool[
+            f"core_projection_90_gw{gw}"
+        ]
+        for gw in gameweeks
+    )
+
+    pool["core_projection_xmins_8gw"] = sum(
+        pool[
+            f"core_projection_xmins_gw{gw}"
+        ]
+        for gw in gameweeks
+    )
+
+    pool["xmins_projection_factor_8gw"] = np.where(
+        pool["core_projection_90_8gw"].abs() > 1e-12,
+        (
+            pool["core_projection_xmins_8gw"]
+            / pool["core_projection_90_8gw"]
+        ),
+        np.nan,
     )
 
     # --------------------------------------------------------
@@ -805,6 +869,80 @@ def build_solver_pool(
             mask,
             "exclusion_reason",
         ] = "new_player"
+
+    # --------------------------------------------------------
+    # HARD SCORING-ANCHOR VALIDATION
+    #
+    # All anchors must use FINAL predicted minutes.
+    # These checks prevent pre-availability / pre-manual minutes
+    # from leaking back into the solver scenarios.
+    # --------------------------------------------------------
+
+    expected_model_core = (
+        pd.to_numeric(
+            df["predicted_core_pp90"],
+            errors="coerce",
+        )
+        * pd.to_numeric(
+            df["final_predicted_minutes"],
+            errors="coerce",
+        )
+        / 90
+    )
+
+    expected_mean_core = (
+        pd.to_numeric(
+            df["mean_reversion_xpp90"],
+            errors="coerce",
+        )
+        * pd.to_numeric(
+            df["final_predicted_minutes"],
+            errors="coerce",
+        )
+        / 90
+    )
+
+    expected_fixture_core = (
+        pd.to_numeric(
+            df["fixture_full_xpp90"],
+            errors="coerce",
+        )
+        * pd.to_numeric(
+            df["final_predicted_minutes"],
+            errors="coerce",
+        )
+        / 90
+    )
+
+    if not np.allclose(
+        df["model_core_xp_calc"].fillna(0),
+        expected_model_core.fillna(0),
+        atol=1e-9,
+        rtol=1e-9,
+    ):
+        raise ValueError(
+            "Canonical core xP is not using final_predicted_minutes."
+        )
+
+    if not np.allclose(
+        df["mean_reversion_core_xp"].fillna(0),
+        expected_mean_core.fillna(0),
+        atol=1e-9,
+        rtol=1e-9,
+    ):
+        raise ValueError(
+            "Mean-reversion xP is not using final_predicted_minutes."
+        )
+
+    if not np.allclose(
+        df["fixture_full_core_xp"].fillna(0),
+        expected_fixture_core.fillna(0),
+        atol=1e-9,
+        rtol=1e-9,
+    ):
+        raise ValueError(
+            "Fixture-biased xP is not using final_predicted_minutes."
+        )
 
     duplicate_codes = pool[
         pool[
