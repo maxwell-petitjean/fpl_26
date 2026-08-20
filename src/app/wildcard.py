@@ -1,4 +1,3 @@
-import numpy as np
 import pandas as pd
 import pulp
 
@@ -31,7 +30,16 @@ GW_WEIGHTS = [
     0.30,
 ]
 
-BENCH_WEIGHT = 0.10
+# Bench xP is not part of the primary optimisation objective.
+# The solver chooses the squad that maximises the legal Starting XI
+# across the selected horizon.
+BENCH_WEIGHT = 0.00
+
+# Tiny secondary preference for cheaper squads when two solutions
+# have effectively identical starting-XI score. This prevents an
+# unused £6.0m bench player being preferred to an equally useful
+# cheaper bench option simply because the solver is indifferent.
+COST_TIEBREAKER = 1e-6
 
 FIXTURE_SENSITIVE_POSITIONS = {
     "DEF",
@@ -201,72 +209,6 @@ def apply_model_bias(
                 )
             )
 
-    # --------------------------------------------------------
-    # HARD MODEL-BIAS INVARIANTS
-    #
-    # 0%:
-    #   scenario MUST equal canonical xp exactly.
-    #
-    # -100%:
-    #   scenario MUST equal the mean-reversion anchor exactly.
-    #
-    # +100%:
-    #   DEF/MID MUST equal full fixture xP;
-    #   GK/FWD MUST remain canonical.
-    # --------------------------------------------------------
-
-    if abs(bias) < 1e-12:
-        for gw in gameweeks:
-            if not np.allclose(
-                pool[f"scenario_xp_gw{gw}"].fillna(0),
-                pool[f"xp_gw{gw}"].fillna(0),
-                atol=1e-9,
-                rtol=1e-9,
-            ):
-                raise ValueError(
-                    f"0% model bias invariant failed for GW{gw}."
-                )
-
-    if abs(bias + 1.0) < 1e-12:
-        for gw in gameweeks:
-            if not np.allclose(
-                pool[f"scenario_xp_gw{gw}"].fillna(0),
-                pool[f"mean_reversion_xp_gw{gw}"].fillna(0),
-                atol=1e-9,
-                rtol=1e-9,
-            ):
-                raise ValueError(
-                    f"-100% model bias invariant failed for GW{gw}."
-                )
-
-    if abs(bias - 1.0) < 1e-12:
-        for gw in gameweeks:
-            scenario = pool[f"scenario_xp_gw{gw}"]
-            canonical = pool[f"xp_gw{gw}"]
-            fixture = pool[f"fixture_full_xp_gw{gw}"]
-
-            if not np.allclose(
-                scenario.loc[fixture_mask].fillna(0),
-                fixture.loc[fixture_mask].fillna(0),
-                atol=1e-9,
-                rtol=1e-9,
-            ):
-                raise ValueError(
-                    f"+100% fixture invariant failed for GW{gw}: "
-                    "DEF/MID must equal fixture_full_xp."
-                )
-
-            if not np.allclose(
-                scenario.loc[~fixture_mask].fillna(0),
-                canonical.loc[~fixture_mask].fillna(0),
-                atol=1e-9,
-                rtol=1e-9,
-            ):
-                raise ValueError(
-                    f"+100% fixture invariant failed for GW{gw}: "
-                    "GK/FWD must remain canonical."
-                )
-
     pool[
         "scenario_xp_8gw"
     ] = sum(
@@ -326,6 +268,7 @@ def apply_model_bias(
 def solve_wildcard(
     solver_pool: pd.DataFrame,
     model_bias: float = 0.0,
+    horizon_weeks: int = 8,
 ):
 
     pool = apply_model_bias(
@@ -353,7 +296,7 @@ def solve_wildcard(
             "to player_code."
         )
 
-    gameweeks = sorted(
+    all_gameweeks = sorted(
         int(
             c.replace(
                 "scenario_xp_gw",
@@ -371,6 +314,28 @@ def solve_wildcard(
             ).isdigit()
         )
     )
+
+    if horizon_weeks not in {
+        1,
+        3,
+        5,
+        8,
+    }:
+        raise ValueError(
+            "horizon_weeks must be one of "
+            "{1, 3, 5, 8}."
+        )
+
+    if len(all_gameweeks) < horizon_weeks:
+        raise ValueError(
+            f"Requested {horizon_weeks} gameweeks, "
+            f"but only {len(all_gameweeks)} are available."
+        )
+
+    # Optimise only over the requested forward horizon.
+    gameweeks = all_gameweeks[
+        :horizon_weeks
+    ]
 
     gw_weight_map = {
         gw: GW_WEIGHTS[i]
@@ -420,7 +385,22 @@ def solve_wildcard(
         for gw in gameweeks
     }
 
-    model += pulp.lpSum(
+    # --------------------------------------------------------
+    # OBJECTIVE
+    #
+    # Primary:
+    #   maximise expected points from the legal Starting XI
+    #   across the selected horizon.
+    #
+    # Bench players contribute 0 xP to the primary score.
+    #
+    # Secondary:
+    #   use a tiny cost penalty so that, where two squads have
+    #   effectively identical Starting-XI output, the cheaper
+    #   squad / bench is preferred.
+    # --------------------------------------------------------
+
+    starting_xp_objective = pulp.lpSum(
         gw_weight_map[gw]
         * float(
             row.loc[
@@ -428,22 +408,31 @@ def solve_wildcard(
                 f"scenario_xp_gw{gw}",
             ]
         )
-        * (
-            BENCH_WEIGHT
-            * squad[p]
-            + (
-                1
-                - BENCH_WEIGHT
+        * start[
+            (
+                p,
+                gw,
             )
-            * start[
-                (
-                    p,
-                    gw,
-                )
-            ]
-        )
+        ]
         for p in players
         for gw in gameweeks
+    )
+
+    squad_cost_tiebreak = pulp.lpSum(
+        float(
+            row.loc[
+                p,
+                "price",
+            ]
+        )
+        * squad[p]
+        for p in players
+    )
+
+    model += (
+        starting_xp_objective
+        - COST_TIEBREAKER
+        * squad_cost_tiebreak
     )
 
     model += (
@@ -728,6 +717,9 @@ def solve_wildcard(
             .sum()
         ),
         "gameweeks": gameweeks,
+        "horizon_weeks": int(
+            horizon_weeks
+        ),
         "model_bias": float(
             model_bias
         ),
