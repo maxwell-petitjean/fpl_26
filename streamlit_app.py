@@ -876,6 +876,18 @@ with tab_wildcard:
             )
         )
 
+        solve_horizon = st.segmented_control(
+            "Optimisation horizon",
+            options=[
+                1,
+                3,
+                5,
+                8,
+            ],
+            default=8,
+            format_func=lambda x: f"{x} GW",
+        )
+        
         bias_left, bias_mid, bias_right = (
             st.columns(
                 [1, 1, 1]
