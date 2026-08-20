@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pulp
 
@@ -30,15 +31,11 @@ GW_WEIGHTS = [
     0.30,
 ]
 
-# Bench xP is not part of the primary optimisation objective.
-# The solver chooses the squad that maximises the legal Starting XI
-# across the selected horizon.
+# Only Starting XI xP contributes to the primary objective.
 BENCH_WEIGHT = 0.00
 
-# Tiny secondary preference for cheaper squads when two solutions
-# have effectively identical starting-XI score. This prevents an
-# unused £6.0m bench player being preferred to an equally useful
-# cheaper bench option simply because the solver is indifferent.
+# Tiny secondary preference for a cheaper squad when Starting-XI xP
+# is effectively identical.
 COST_TIEBREAKER = 1e-6
 
 FIXTURE_SENSITIVE_POSITIONS = {
@@ -209,6 +206,72 @@ def apply_model_bias(
                 )
             )
 
+    # --------------------------------------------------------
+    # HARD MODEL-BIAS INVARIANTS
+    #
+    # 0%:
+    #   scenario MUST equal canonical xp exactly.
+    #
+    # -100%:
+    #   scenario MUST equal the mean-reversion anchor exactly.
+    #
+    # +100%:
+    #   DEF/MID MUST equal full fixture xP;
+    #   GK/FWD MUST remain canonical.
+    # --------------------------------------------------------
+
+    if abs(bias) < 1e-12:
+        for gw in gameweeks:
+            if not np.allclose(
+                pool[f"scenario_xp_gw{gw}"].fillna(0),
+                pool[f"xp_gw{gw}"].fillna(0),
+                atol=1e-9,
+                rtol=1e-9,
+            ):
+                raise ValueError(
+                    f"0% model bias invariant failed for GW{gw}."
+                )
+
+    if abs(bias + 1.0) < 1e-12:
+        for gw in gameweeks:
+            if not np.allclose(
+                pool[f"scenario_xp_gw{gw}"].fillna(0),
+                pool[f"mean_reversion_xp_gw{gw}"].fillna(0),
+                atol=1e-9,
+                rtol=1e-9,
+            ):
+                raise ValueError(
+                    f"-100% model bias invariant failed for GW{gw}."
+                )
+
+    if abs(bias - 1.0) < 1e-12:
+        for gw in gameweeks:
+            scenario = pool[f"scenario_xp_gw{gw}"]
+            canonical = pool[f"xp_gw{gw}"]
+            fixture = pool[f"fixture_full_xp_gw{gw}"]
+
+            if not np.allclose(
+                scenario.loc[fixture_mask].fillna(0),
+                fixture.loc[fixture_mask].fillna(0),
+                atol=1e-9,
+                rtol=1e-9,
+            ):
+                raise ValueError(
+                    f"+100% fixture invariant failed for GW{gw}: "
+                    "DEF/MID must equal fixture_full_xp."
+                )
+
+            if not np.allclose(
+                scenario.loc[~fixture_mask].fillna(0),
+                canonical.loc[~fixture_mask].fillna(0),
+                atol=1e-9,
+                rtol=1e-9,
+            ):
+                raise ValueError(
+                    f"+100% fixture invariant failed for GW{gw}: "
+                    "GK/FWD must remain canonical."
+                )
+
     pool[
         "scenario_xp_8gw"
     ] = sum(
@@ -269,6 +332,8 @@ def solve_wildcard(
     solver_pool: pd.DataFrame,
     model_bias: float = 0.0,
     horizon_weeks: int = 8,
+    excluded_player_codes=(),
+    excluded_teams=(),
 ):
 
     pool = apply_model_bias(
@@ -277,6 +342,39 @@ def solve_wildcard(
             model_bias
         ),
     )
+
+    excluded_player_codes = {
+        int(x)
+        for x in excluded_player_codes
+    }
+
+    excluded_teams = {
+        str(x)
+        for x in excluded_teams
+    }
+
+    if excluded_player_codes:
+        pool = (
+            pool[
+                ~pool["player_code"]
+                .astype(int)
+                .isin(
+                    excluded_player_codes
+                )
+            ]
+            .copy()
+        )
+
+    if excluded_teams:
+        pool = (
+            pool[
+                ~pool["team_name"]
+                .isin(
+                    excluded_teams
+                )
+            ]
+            .copy()
+        )
 
     pool = (
         pool[
@@ -322,8 +420,7 @@ def solve_wildcard(
         8,
     }:
         raise ValueError(
-            "horizon_weeks must be one of "
-            "{1, 3, 5, 8}."
+            "horizon_weeks must be one of {1, 3, 5, 8}."
         )
 
     if len(all_gameweeks) < horizon_weeks:
@@ -332,10 +429,7 @@ def solve_wildcard(
             f"but only {len(all_gameweeks)} are available."
         )
 
-    # Optimise only over the requested forward horizon.
-    gameweeks = all_gameweeks[
-        :horizon_weeks
-    ]
+    gameweeks = all_gameweeks[:horizon_weeks]
 
     gw_weight_map = {
         gw: GW_WEIGHTS[i]
@@ -343,6 +437,19 @@ def solve_wildcard(
             gameweeks
         )
     }
+
+    for position, required in SQUAD_REQUIREMENTS.items():
+        available = int(
+            pool[
+                pool["position"].eq(position)
+            ].shape[0]
+        )
+
+        if available < required:
+            raise ValueError(
+                f"Not enough eligible {position} players after exclusions. "
+                f"Need {required}, have {available}."
+            )
 
     players = (
         pool["player_code"]
@@ -384,21 +491,6 @@ def solve_wildcard(
         for p in players
         for gw in gameweeks
     }
-
-    # --------------------------------------------------------
-    # OBJECTIVE
-    #
-    # Primary:
-    #   maximise expected points from the legal Starting XI
-    #   across the selected horizon.
-    #
-    # Bench players contribute 0 xP to the primary score.
-    #
-    # Secondary:
-    #   use a tiny cost penalty so that, where two squads have
-    #   effectively identical Starting-XI output, the cheaper
-    #   squad / bench is preferred.
-    # --------------------------------------------------------
 
     starting_xp_objective = pulp.lpSum(
         gw_weight_map[gw]
@@ -719,6 +811,12 @@ def solve_wildcard(
         "gameweeks": gameweeks,
         "horizon_weeks": int(
             horizon_weeks
+        ),
+        "excluded_player_codes": tuple(
+            sorted(excluded_player_codes)
+        ),
+        "excluded_teams": tuple(
+            sorted(excluded_teams)
         ),
         "model_bias": float(
             model_bias
