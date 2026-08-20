@@ -14,12 +14,13 @@ from src.app.wildcard import solve_wildcard
 def solve_wildcard_cached(
     solver_pool,
     model_bias,
+    horizon_weeks,
 ):
     return solve_wildcard(
         solver_pool,
         model_bias=model_bias,
+        horizon_weeks=horizon_weeks,
     )
-
 
 
 # ============================================================
@@ -946,6 +947,7 @@ with tab_wildcard:
     result = solve_wildcard_cached(
         solver_pool,
         model_bias=model_bias,
+        horizon_weeks=solve_horizon,
     )
 
     squad = result["squad"]
