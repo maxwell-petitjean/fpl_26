@@ -1011,20 +1011,20 @@ with tab_wildcard:
     # ========================================================
     # STARTING XI MATRIX
     # ========================================================
-
+    
     st.markdown(
         "### Starting XI by gameweek"
     )
-
+    
     st.caption(
         "Heatmap shows predicted xP. "
         "Light cells indicate the player is benched."
     )
-
+    
     lineup_matrix = (
         lineups.copy()
     )
-
+    
     lineup_matrix[
         "starter_xp"
     ] = np.where(
@@ -1034,7 +1034,17 @@ with tab_wildcard:
         lineup_matrix["xp"],
         0,
     )
-
+    
+    lineup_matrix[
+        "bench_xp"
+    ] = np.where(
+        lineup_matrix[
+            "starting_xi"
+        ].eq(0),
+        lineup_matrix["xp"],
+        0,
+    )
+    
     gameweeks = sorted(
         lineup_matrix[
             "gameweek"
@@ -1043,7 +1053,12 @@ with tab_wildcard:
         .unique()
         .tolist()
     )
-
+    
+    
+    # ========================================================
+    # PLAYER BASE
+    # ========================================================
+    
     base = (
         lineup_matrix[
             [
@@ -1058,7 +1073,12 @@ with tab_wildcard:
         )
         .copy()
     )
-
+    
+    
+    # ========================================================
+    # GAMEWEEK PIVOTS
+    # ========================================================
+    
     xp_pivot = (
         lineup_matrix
         .pivot(
@@ -1067,7 +1087,7 @@ with tab_wildcard:
             values="xp",
         )
     )
-
+    
     starter_pivot = (
         lineup_matrix
         .pivot(
@@ -1076,17 +1096,41 @@ with tab_wildcard:
             values="starting_xi",
         )
     )
-
+    
+    
+    # ========================================================
+    # PLAYER TOTALS
+    # ========================================================
+    
+    xp_total = (
+        lineup_matrix
+        .groupby(
+            "player_code"
+        )["xp"]
+        .sum()
+    )
+    
     starter_total = (
         lineup_matrix
         .groupby(
             "player_code"
-        )[
-            "starter_xp"
-        ]
+        )["starter_xp"]
         .sum()
     )
-
+    
+    bench_total = (
+        lineup_matrix
+        .groupby(
+            "player_code"
+        )["bench_xp"]
+        .sum()
+    )
+    
+    
+    # ========================================================
+    # BUILD MATRIX
+    # ========================================================
+    
     matrix = (
         base
         .set_index(
@@ -1096,7 +1140,7 @@ with tab_wildcard:
             xp_pivot
         )
     )
-
+    
     matrix = matrix[
         [
             "web_name",
@@ -1105,45 +1149,37 @@ with tab_wildcard:
             *gameweeks,
         ]
     ]
-
-    xp_total = (
-        lineup_matrix
-        .groupby(
-            "player_code"
-        )["xp"]
-        .sum()
-    )
-
-    bench_total = (
-        xp_total
-        - starter_total
-    )
-
+    
     matrix[
         "Total"
     ] = (
         xp_total
     )
-
+    
     matrix[
         "Starting"
     ] = (
         starter_total
     )
-
+    
     matrix[
         "Bench"
     ] = (
         bench_total
     )
-
+    
+    
+    # ========================================================
+    # POSITION SORT
+    # ========================================================
+    
     position_order = {
         "GK": 1,
         "DEF": 2,
         "MID": 3,
         "FWD": 4,
     }
-
+    
     matrix[
         "_position_order"
     ] = (
@@ -1152,7 +1188,7 @@ with tab_wildcard:
             position_order
         )
     )
-
+    
     matrix = (
         matrix
         .sort_values(
@@ -1171,23 +1207,259 @@ with tab_wildcard:
             ]
         )
     )
-
+    
+    
+    # ========================================================
+    # GAMEWEEK TOTALS
+    # ========================================================
+    
+    starting_by_gw = {}
+    
+    bench_by_gw = {}
+    
+    full_squad_by_gw = {}
+    
+    for gw in gameweeks:
+    
+        starter_mask = (
+            starter_pivot[gw]
+            .eq(1)
+        )
+    
+        bench_mask = (
+            starter_pivot[gw]
+            .eq(0)
+        )
+    
+        starting_by_gw[
+            gw
+        ] = (
+            matrix.loc[
+                starter_mask,
+                gw,
+            ]
+            .sum()
+        )
+    
+        bench_by_gw[
+            gw
+        ] = (
+            matrix.loc[
+                bench_mask,
+                gw,
+            ]
+            .sum()
+        )
+    
+        full_squad_by_gw[
+            gw
+        ] = (
+            matrix[gw]
+            .sum()
+        )
+    
+    
+    # ========================================================
+    # HELPER CARDS
+    # ========================================================
+    
+    best_bb_gw = max(
+        gameweeks,
+        key=lambda gw:
+            bench_by_gw[gw]
+    )
+    
+    best_starting_gw = max(
+        gameweeks,
+        key=lambda gw:
+            starting_by_gw[gw]
+    )
+    
+    best_full_squad_gw = max(
+        gameweeks,
+        key=lambda gw:
+            full_squad_by_gw[gw]
+    )
+    
+    h1, h2, h3 = st.columns(3)
+    
+    h1.metric(
+        "Best Bench Boost candidate",
+        f"GW{best_bb_gw}",
+        (
+            f"{bench_by_gw[best_bb_gw]:.1f} "
+            "bench xP"
+        ),
+    )
+    
+    h2.metric(
+        "Best Starting XI GW",
+        f"GW{best_starting_gw}",
+        (
+            f"{starting_by_gw[best_starting_gw]:.1f} "
+            "starting xP"
+        ),
+    )
+    
+    h3.metric(
+        "Best Full Squad GW",
+        f"GW{best_full_squad_gw}",
+        (
+            f"{full_squad_by_gw[best_full_squad_gw]:.1f} "
+            "15-player xP"
+        ),
+    )
+    
+    
+    # ========================================================
+    # SUMMARY ROWS
+    # ========================================================
+    
+    starting_row = {
+        "web_name":
+            "STARTING XI",
+        "position":
+            "",
+        "price":
+            np.nan,
+    }
+    
+    bench_row = {
+        "web_name":
+            "BENCH",
+        "position":
+            "",
+        "price":
+            np.nan,
+    }
+    
+    for gw in gameweeks:
+    
+        starting_row[
+            gw
+        ] = (
+            starting_by_gw[
+                gw
+            ]
+        )
+    
+        bench_row[
+            gw
+        ] = (
+            bench_by_gw[
+                gw
+            ]
+        )
+    
+    starting_row[
+        "Total"
+    ] = (
+        matrix[
+            "Starting"
+        ]
+        .sum()
+    )
+    
+    starting_row[
+        "Starting"
+    ] = (
+        matrix[
+            "Starting"
+        ]
+        .sum()
+    )
+    
+    starting_row[
+        "Bench"
+    ] = 0.0
+    
+    
+    bench_row[
+        "Total"
+    ] = (
+        matrix[
+            "Bench"
+        ]
+        .sum()
+    )
+    
+    bench_row[
+        "Starting"
+    ] = 0.0
+    
+    bench_row[
+        "Bench"
+    ] = (
+        matrix[
+            "Bench"
+        ]
+        .sum()
+    )
+    
+    
+    matrix.loc[
+        "STARTING_XI_TOTAL"
+    ] = starting_row
+    
+    matrix.loc[
+        "BENCH_TOTAL"
+    ] = bench_row
+    
+    
+    # ========================================================
+    # STYLING
+    # ========================================================
+    
     def style_lineup_matrix(
         row
     ):
-
+    
+        # --------------------------------------------
+        # SUMMARY ROWS
+        # --------------------------------------------
+    
+        if (
+            row.name
+            == "STARTING_XI_TOTAL"
+        ):
+    
+            return [
+                (
+                    "font-weight: 800; "
+                    "border-top: 3px solid #111111; "
+                    "background-color: #dff2e1;"
+                )
+            ] * len(row)
+    
+        if (
+            row.name
+            == "BENCH_TOTAL"
+        ):
+    
+            return [
+                (
+                    "font-weight: 800; "
+                    "background-color: #e8e8e8; "
+                    "color: #555555;"
+                )
+            ] * len(row)
+    
+        # --------------------------------------------
+        # PLAYER ROWS
+        # --------------------------------------------
+    
         styles = [
             "",  # web_name
             "",  # position
             "",  # price
         ]
-
+    
         player_code = (
             row.name
         )
-
+    
         for gw in gameweeks:
-
+    
             is_start = (
                 starter_pivot.loc[
                     player_code,
@@ -1195,18 +1467,21 @@ with tab_wildcard:
                 ]
                 == 1
             )
-
+    
             if is_start:
+    
                 styles.append(
                     "font-weight: 700;"
                 )
+    
             else:
+    
                 styles.append(
                     "background-color: #e8e8e8; "
                     "color: #777777; "
                     "font-weight: 500;"
                 )
-
+    
         styles.extend(
             [
                 "font-weight: 700;",  # Total
@@ -1214,9 +1489,14 @@ with tab_wildcard:
                 "color: #777777;",    # Bench
             ]
         )
-
+    
         return styles
-
+    
+    
+    # ========================================================
+    # FORMAT
+    # ========================================================
+    
     styled_matrix = (
         matrix
         .style
@@ -1234,20 +1514,30 @@ with tab_wildcard:
                 for gw in gameweeks
             }
             | {
-                "price": "£{:.1f}m",
-                "Total": "{:.2f}",
-                "Starting": "{:.2f}",
-                "Bench": "{:.2f}",
-            }
+                "price":
+                    "£{:.1f}m",
+                "Total":
+                    "{:.2f}",
+                "Starting":
+                    "{:.2f}",
+                "Bench":
+                    "{:.2f}",
+            },
+            na_rep="",
         )
     )
-
+    
+    
+    # ========================================================
+    # DISPLAY
+    # ========================================================
+    
     st.dataframe(
         styled_matrix,
         width="stretch",
-        height=650,
+        height=720,
     )
-
+    
     # ========================================================
     # TOP THREATS
     # ========================================================
