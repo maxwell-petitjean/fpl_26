@@ -15,12 +15,21 @@ def solve_wildcard_cached(
     solver_pool,
     model_bias,
     horizon_weeks,
+    excluded_player_codes,
+    excluded_teams,
 ):
     return solve_wildcard(
         solver_pool,
         model_bias=model_bias,
         horizon_weeks=horizon_weeks,
+        excluded_player_codes=(
+            excluded_player_codes
+        ),
+        excluded_teams=(
+            excluded_teams
+        ),
     )
+
 
 
 # ============================================================
@@ -852,6 +861,30 @@ with tab_wildcard:
             "applied_model_bias_pct"
         ] = 0
 
+    if (
+        "applied_solve_horizon"
+        not in st.session_state
+    ):
+        st.session_state[
+            "applied_solve_horizon"
+        ] = 8
+
+    if (
+        "applied_excluded_player_codes"
+        not in st.session_state
+    ):
+        st.session_state[
+            "applied_excluded_player_codes"
+        ] = ()
+
+    if (
+        "applied_excluded_teams"
+        not in st.session_state
+    ):
+        st.session_state[
+            "applied_excluded_teams"
+        ] = ()
+
     with st.form(
         "scoring_strategy_form"
     ):
@@ -876,18 +909,111 @@ with tab_wildcard:
             )
         )
 
-        solve_horizon = st.segmented_control(
-            "Optimisation horizon",
-            options=[
-                1,
-                3,
-                5,
-                8,
-            ],
-            default=8,
-            format_func=lambda x: f"{x} GW",
+        selected_solve_horizon = (
+            st.segmented_control(
+                "Optimisation horizon",
+                options=[
+                    1,
+                    3,
+                    5,
+                    8,
+                ],
+                default=st.session_state[
+                    "applied_solve_horizon"
+                ],
+                format_func=lambda x:
+                    f"{x} GW",
+            )
         )
-        
+
+        st.markdown(
+            "#### Exclusions"
+        )
+
+        player_options = (
+            solver_pool[
+                [
+                    "player_code",
+                    "web_name",
+                    "position",
+                    "team_name",
+                    "price",
+                ]
+            ]
+            .drop_duplicates(
+                "player_code"
+            )
+            .sort_values(
+                [
+                    "web_name",
+                    "team_name",
+                    "position",
+                ]
+            )
+        )
+
+        player_label_map = {
+            int(row.player_code): (
+                f"{row.web_name} · "
+                f"{row.position} · "
+                f"{row.team_name} · "
+                f"£{row.price:.1f}m"
+            )
+            for row
+            in player_options.itertuples()
+        }
+
+        selected_excluded_player_codes = (
+            st.multiselect(
+                "Exclude players",
+                options=list(
+                    player_label_map.keys()
+                ),
+                default=list(
+                    st.session_state[
+                        "applied_excluded_player_codes"
+                    ]
+                ),
+                format_func=lambda player_code:
+                    player_label_map[
+                        player_code
+                    ],
+                placeholder=(
+                    "Search player name..."
+                ),
+                key=(
+                    "excluded_players_input"
+                ),
+            )
+        )
+
+        team_options = sorted(
+            solver_pool[
+                "team_name"
+            ]
+            .dropna()
+            .unique()
+            .tolist()
+        )
+
+        selected_excluded_teams = (
+            st.multiselect(
+                "Exclude teams",
+                options=team_options,
+                default=list(
+                    st.session_state[
+                        "applied_excluded_teams"
+                    ]
+                ),
+                placeholder=(
+                    "Select teams..."
+                ),
+                key=(
+                    "excluded_teams_input"
+                ),
+            )
+        )
+
         bias_left, bias_mid, bias_right = (
             st.columns(
                 [1, 1, 1]
@@ -927,6 +1053,28 @@ with tab_wildcard:
             selected_model_bias_pct
         )
 
+        st.session_state[
+            "applied_solve_horizon"
+        ] = int(
+            selected_solve_horizon
+        )
+
+        st.session_state[
+            "applied_excluded_player_codes"
+        ] = tuple(
+            int(x)
+            for x
+            in selected_excluded_player_codes
+        )
+
+        st.session_state[
+            "applied_excluded_teams"
+        ] = tuple(
+            str(x)
+            for x
+            in selected_excluded_teams
+        )
+
     model_bias_pct = (
         st.session_state[
             "applied_model_bias_pct"
@@ -936,6 +1084,24 @@ with tab_wildcard:
     model_bias = (
         model_bias_pct
         / 100
+    )
+
+    solve_horizon = int(
+        st.session_state[
+            "applied_solve_horizon"
+        ]
+    )
+
+    excluded_player_codes = tuple(
+        st.session_state[
+            "applied_excluded_player_codes"
+        ]
+    )
+
+    excluded_teams = tuple(
+        st.session_state[
+            "applied_excluded_teams"
+        ]
     )
 
     if model_bias_pct < 0:
@@ -956,10 +1122,47 @@ with tab_wildcard:
             "Current solve: canonical model."
         )
 
+    context_bits = [
+        f"{solve_horizon} GW horizon"
+    ]
+
+    if excluded_player_codes:
+        context_bits.append(
+            f"{len(excluded_player_codes)} player exclusion"
+            + (
+                "s"
+                if len(excluded_player_codes) != 1
+                else ""
+            )
+        )
+
+    if excluded_teams:
+        context_bits.append(
+            f"{len(excluded_teams)} team exclusion"
+            + (
+                "s"
+                if len(excluded_teams) != 1
+                else ""
+            )
+        )
+
+    st.caption(
+        "Current optimisation: "
+        + " · ".join(
+            context_bits
+        )
+    )
+
     result = solve_wildcard_cached(
         solver_pool,
         model_bias=model_bias,
         horizon_weeks=solve_horizon,
+        excluded_player_codes=(
+            excluded_player_codes
+        ),
+        excluded_teams=(
+            excluded_teams
+        ),
     )
 
     squad = result["squad"]
@@ -1011,20 +1214,20 @@ with tab_wildcard:
     # ========================================================
     # STARTING XI MATRIX
     # ========================================================
-    
+
     st.markdown(
         "### Starting XI by gameweek"
     )
-    
+
     st.caption(
         "Heatmap shows predicted xP. "
         "Light cells indicate the player is benched."
     )
-    
+
     lineup_matrix = (
         lineups.copy()
     )
-    
+
     lineup_matrix[
         "starter_xp"
     ] = np.where(
@@ -1034,17 +1237,7 @@ with tab_wildcard:
         lineup_matrix["xp"],
         0,
     )
-    
-    lineup_matrix[
-        "bench_xp"
-    ] = np.where(
-        lineup_matrix[
-            "starting_xi"
-        ].eq(0),
-        lineup_matrix["xp"],
-        0,
-    )
-    
+
     gameweeks = sorted(
         lineup_matrix[
             "gameweek"
@@ -1053,12 +1246,7 @@ with tab_wildcard:
         .unique()
         .tolist()
     )
-    
-    
-    # ========================================================
-    # PLAYER BASE
-    # ========================================================
-    
+
     base = (
         lineup_matrix[
             [
@@ -1073,12 +1261,7 @@ with tab_wildcard:
         )
         .copy()
     )
-    
-    
-    # ========================================================
-    # GAMEWEEK PIVOTS
-    # ========================================================
-    
+
     xp_pivot = (
         lineup_matrix
         .pivot(
@@ -1087,7 +1270,7 @@ with tab_wildcard:
             values="xp",
         )
     )
-    
+
     starter_pivot = (
         lineup_matrix
         .pivot(
@@ -1096,41 +1279,17 @@ with tab_wildcard:
             values="starting_xi",
         )
     )
-    
-    
-    # ========================================================
-    # PLAYER TOTALS
-    # ========================================================
-    
-    xp_total = (
-        lineup_matrix
-        .groupby(
-            "player_code"
-        )["xp"]
-        .sum()
-    )
-    
+
     starter_total = (
         lineup_matrix
         .groupby(
             "player_code"
-        )["starter_xp"]
+        )[
+            "starter_xp"
+        ]
         .sum()
     )
-    
-    bench_total = (
-        lineup_matrix
-        .groupby(
-            "player_code"
-        )["bench_xp"]
-        .sum()
-    )
-    
-    
-    # ========================================================
-    # BUILD MATRIX
-    # ========================================================
-    
+
     matrix = (
         base
         .set_index(
@@ -1140,7 +1299,7 @@ with tab_wildcard:
             xp_pivot
         )
     )
-    
+
     matrix = matrix[
         [
             "web_name",
@@ -1149,37 +1308,45 @@ with tab_wildcard:
             *gameweeks,
         ]
     ]
-    
+
+    xp_total = (
+        lineup_matrix
+        .groupby(
+            "player_code"
+        )["xp"]
+        .sum()
+    )
+
+    bench_total = (
+        xp_total
+        - starter_total
+    )
+
     matrix[
         "Total"
     ] = (
         xp_total
     )
-    
+
     matrix[
         "Starting"
     ] = (
         starter_total
     )
-    
+
     matrix[
         "Bench"
     ] = (
         bench_total
     )
-    
-    
-    # ========================================================
-    # POSITION SORT
-    # ========================================================
-    
+
     position_order = {
         "GK": 1,
         "DEF": 2,
         "MID": 3,
         "FWD": 4,
     }
-    
+
     matrix[
         "_position_order"
     ] = (
@@ -1188,7 +1355,7 @@ with tab_wildcard:
             position_order
         )
     )
-    
+
     matrix = (
         matrix
         .sort_values(
@@ -1207,260 +1374,23 @@ with tab_wildcard:
             ]
         )
     )
-    
-    
-    # ========================================================
-    # GAMEWEEK TOTALS
-    # ========================================================
-    
-    starting_by_gw = {}
-    
-    bench_by_gw = {}
-    
-    full_squad_by_gw = {}
-    
-    for gw in gameweeks:
-    
-        starter_mask = (
-            starter_pivot[gw]
-            .eq(1)
-        )
-    
-        bench_mask = (
-            starter_pivot[gw]
-            .eq(0)
-        )
-    
-        starting_by_gw[
-            gw
-        ] = (
-            matrix.loc[
-                starter_mask,
-                gw,
-            ]
-            .sum()
-        )
-    
-        bench_by_gw[
-            gw
-        ] = (
-            matrix.loc[
-                bench_mask,
-                gw,
-            ]
-            .sum()
-        )
-    
-        full_squad_by_gw[
-            gw
-        ] = (
-            matrix[gw]
-            .sum()
-        )
-    
-    
-    # ========================================================
-    # HELPER CARDS
-    # ========================================================
-    
-    best_bb_gw = max(
-        gameweeks,
-        key=lambda gw:
-            bench_by_gw[gw]
-    )
-    
-    best_starting_gw = max(
-        gameweeks,
-        key=lambda gw:
-            starting_by_gw[gw]
-    )
-    
-    best_full_squad_gw = max(
-        gameweeks,
-        key=lambda gw:
-            full_squad_by_gw[gw]
-    )
-    
-    h1, h2, h3 = st.columns(3)
-    
-    h1.metric(
-        "Best Bench Boost candidate",
-        f"GW{best_bb_gw}",
-        (
-            f"{bench_by_gw[best_bb_gw]:.1f} "
-            "bench xP"
-        ),
-    )
-    
-    h2.metric(
-        "Best Starting XI GW",
-        f"GW{best_starting_gw}",
-        (
-            f"{starting_by_gw[best_starting_gw]:.1f} "
-            "starting xP"
-        ),
-    )
-    
-    h3.metric(
-        "Best Full Squad GW",
-        f"GW{best_full_squad_gw}",
-        (
-            f"{full_squad_by_gw[best_full_squad_gw]:.1f} "
-            "15-player xP"
-        ),
-    )
-    
-    
-    # ========================================================
-    # SUMMARY ROWS
-    # ========================================================
-    
-    starting_row = {
-        "web_name":
-            "STARTING XI",
-        "position":
-            "",
-        "price":
-            np.nan,
-    }
-    
-    bench_row = {
-        "web_name":
-            "BENCH",
-        "position":
-            "",
-        "price":
-            np.nan,
-    }
-    
-    for gw in gameweeks:
-    
-        starting_row[
-            gw
-        ] = (
-            starting_by_gw[
-                gw
-            ]
-        )
-    
-        bench_row[
-            gw
-        ] = (
-            bench_by_gw[
-                gw
-            ]
-        )
-    
-    starting_row[
-        "Total"
-    ] = (
-        matrix[
-            "Starting"
-        ]
-        .sum()
-    )
-    
-    starting_row[
-        "Starting"
-    ] = (
-        matrix[
-            "Starting"
-        ]
-        .sum()
-    )
-    
-    starting_row[
-        "Bench"
-    ] = 0.0
-    
-    
-    bench_row[
-        "Total"
-    ] = (
-        matrix[
-            "Bench"
-        ]
-        .sum()
-    )
-    
-    bench_row[
-        "Starting"
-    ] = 0.0
-    
-    bench_row[
-        "Bench"
-    ] = (
-        matrix[
-            "Bench"
-        ]
-        .sum()
-    )
-    
-    
-    matrix.loc[
-        "STARTING_XI_TOTAL"
-    ] = starting_row
-    
-    matrix.loc[
-        "BENCH_TOTAL"
-    ] = bench_row
-    
-    
-    # ========================================================
-    # STYLING
-    # ========================================================
-    
+
     def style_lineup_matrix(
         row
     ):
-    
-        # --------------------------------------------
-        # SUMMARY ROWS
-        # --------------------------------------------
-    
-        if (
-            row.name
-            == "STARTING_XI_TOTAL"
-        ):
-    
-            return [
-                (
-                    "font-weight: 800; "
-                    "border-top: 3px solid #111111; "
-                    "background-color: #dff2e1; "
-                    "color: #111111;"
-                )
-            ] * len(row)
-    
-        if (
-            row.name
-            == "BENCH_TOTAL"
-        ):
-    
-            return [
-                (
-                    "font-weight: 800; "
-                    "background-color: #e8e8e8; "
-                    "color: #555555;"
-                )
-            ] * len(row)
-    
-        # --------------------------------------------
-        # PLAYER ROWS
-        # --------------------------------------------
-    
+
         styles = [
             "",  # web_name
             "",  # position
             "",  # price
         ]
-    
+
         player_code = (
             row.name
         )
-    
+
         for gw in gameweeks:
-    
+
             is_start = (
                 starter_pivot.loc[
                     player_code,
@@ -1468,21 +1398,18 @@ with tab_wildcard:
                 ]
                 == 1
             )
-    
+
             if is_start:
-    
                 styles.append(
                     "font-weight: 700;"
                 )
-    
             else:
-    
                 styles.append(
                     "background-color: #e8e8e8; "
                     "color: #777777; "
                     "font-weight: 500;"
                 )
-    
+
         styles.extend(
             [
                 "font-weight: 700;",  # Total
@@ -1490,14 +1417,9 @@ with tab_wildcard:
                 "color: #777777;",    # Bench
             ]
         )
-    
+
         return styles
-    
-    
-    # ========================================================
-    # FORMAT
-    # ========================================================
-    
+
     styled_matrix = (
         matrix
         .style
@@ -1515,30 +1437,20 @@ with tab_wildcard:
                 for gw in gameweeks
             }
             | {
-                "price":
-                    "£{:.1f}m",
-                "Total":
-                    "{:.2f}",
-                "Starting":
-                    "{:.2f}",
-                "Bench":
-                    "{:.2f}",
-            },
-            na_rep="",
+                "price": "£{:.1f}m",
+                "Total": "{:.2f}",
+                "Starting": "{:.2f}",
+                "Bench": "{:.2f}",
+            }
         )
     )
-    
-    
-    # ========================================================
-    # DISPLAY
-    # ========================================================
-    
+
     st.dataframe(
         styled_matrix,
         width="stretch",
-        height=720,
+        height=650,
     )
-    
+
     # ========================================================
     # TOP THREATS
     # ========================================================
