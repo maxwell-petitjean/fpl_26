@@ -1427,7 +1427,8 @@ with tab_wildcard:
                 (
                     "font-weight: 800; "
                     "border-top: 3px solid #111111; "
-                    "background-color: #dff2e1;"
+                    "background-color: #dff2e1; "
+                    "color: #111111;"
                 )
             ] * len(row)
     
