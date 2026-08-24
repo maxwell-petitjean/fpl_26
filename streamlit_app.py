@@ -6,6 +6,23 @@ from google.oauth2 import service_account
 
 from src.app.data import load_solver_pool
 from src.app.wildcard import solve_wildcard
+from src.app.fpl_team import (
+    FPLTeamError,
+    load_fpl_team,
+    map_fpl_team_to_solver,
+)
+
+
+@st.cache_data(
+    ttl=300,
+    show_spinner="Loading FPL team..."
+)
+def load_fpl_team_cached(
+    team_id,
+):
+    return load_fpl_team(
+        int(team_id)
+    )
 
 
 @st.cache_data(
@@ -18,6 +35,9 @@ def solve_wildcard_cached(
     locked_player_codes,
     excluded_player_codes,
     excluded_teams,
+    current_player_codes,
+    max_transfers,
+    budget,
 ):
     return solve_wildcard(
         solver_pool,
@@ -32,6 +52,11 @@ def solve_wildcard_cached(
         excluded_teams=(
             excluded_teams
         ),
+        current_player_codes=(
+            current_player_codes
+        ),
+        max_transfers=max_transfers,
+        budget=budget,
     )
 
 
@@ -858,6 +883,30 @@ with tab_wildcard:
     )
 
     if (
+        "applied_optimisation_mode"
+        not in st.session_state
+    ):
+        st.session_state[
+            "applied_optimisation_mode"
+        ] = "Wildcard"
+
+    if (
+        "applied_fpl_team_id"
+        not in st.session_state
+    ):
+        st.session_state[
+            "applied_fpl_team_id"
+        ] = None
+
+    if (
+        "applied_max_transfers"
+        not in st.session_state
+    ):
+        st.session_state[
+            "applied_max_transfers"
+        ] = 1
+
+    if (
         "applied_model_bias_pct"
         not in st.session_state
     ):
@@ -900,6 +949,60 @@ with tab_wildcard:
     with st.form(
         "scoring_strategy_form"
     ):
+
+        selected_optimisation_mode = (
+            st.segmented_control(
+                "Optimisation mode",
+                options=[
+                    "Wildcard",
+                    "My team",
+                    "Transfers",
+                ],
+                default=st.session_state[
+                    "applied_optimisation_mode"
+                ],
+                help=(
+                    "Wildcard builds the best squad from scratch. "
+                    "My team keeps your current 15 and optimises the XI. "
+                    "Transfers starts from your current squad and allows "
+                    "a limited number of changes."
+                ),
+            )
+        )
+
+        selected_fpl_team_id = st.number_input(
+            "FPL Team ID",
+            min_value=1,
+            step=1,
+            value=(
+                st.session_state[
+                    "applied_fpl_team_id"
+                ]
+            ),
+            placeholder="Enter your FPL Team ID",
+            help=(
+                "Required for My team and Transfers modes. "
+                "The app loads the latest publicly available 15-player squad."
+            ),
+        )
+
+        selected_max_transfers = (
+            st.segmented_control(
+                "Maximum transfers",
+                options=[
+                    1,
+                    2,
+                    3,
+                ],
+                default=st.session_state[
+                    "applied_max_transfers"
+                ],
+                help=(
+                    "Used only in Transfers mode. "
+                    "The optimiser may use fewer transfers if that scores better."
+                ),
+            )
+        )
 
         selected_model_bias_pct = (
             st.slider(
@@ -1088,6 +1191,28 @@ with tab_wildcard:
 
     if run_solver:
         st.session_state[
+            "applied_optimisation_mode"
+        ] = (
+            selected_optimisation_mode
+            or "Wildcard"
+        )
+
+        st.session_state[
+            "applied_fpl_team_id"
+        ] = (
+            int(selected_fpl_team_id)
+            if selected_fpl_team_id
+            else None
+        )
+
+        st.session_state[
+            "applied_max_transfers"
+        ] = int(
+            selected_max_transfers
+            or 1
+        )
+
+        st.session_state[
             "applied_model_bias_pct"
         ] = (
             selected_model_bias_pct
@@ -1122,6 +1247,24 @@ with tab_wildcard:
             for x
             in selected_excluded_teams
         )
+
+    optimisation_mode = (
+        st.session_state[
+            "applied_optimisation_mode"
+        ]
+    )
+
+    fpl_team_id = (
+        st.session_state[
+            "applied_fpl_team_id"
+        ]
+    )
+
+    applied_max_transfers = int(
+        st.session_state[
+            "applied_max_transfers"
+        ]
+    )
 
     model_bias_pct = (
         st.session_state[
@@ -1158,6 +1301,124 @@ with tab_wildcard:
         ]
     )
 
+    current_player_codes = ()
+    transfer_budget = None
+    loaded_team = None
+    effective_max_transfers = None
+
+    if optimisation_mode in {
+        "My team",
+        "Transfers",
+    }:
+        if not fpl_team_id:
+            st.warning(
+                "Enter an FPL Team ID and click Run optimisation."
+            )
+            st.stop()
+
+        try:
+            raw_team = load_fpl_team_cached(
+                int(fpl_team_id)
+            )
+
+            loaded_team = map_fpl_team_to_solver(
+                raw_team,
+                solver_pool,
+            )
+
+        except FPLTeamError as exc:
+            st.error(str(exc))
+            st.stop()
+
+        current_player_codes = tuple(
+            loaded_team[
+                "player_codes"
+            ]
+        )
+
+        # Public FPL data does not expose each player's exact live
+        # transfer selling price. Use the current model price of the
+        # owned 15 plus the public bank as the transfer budget envelope.
+        current_squad_price = float(
+            loaded_team[
+                "squad"
+            ]["price"]
+            .sum()
+        )
+
+        transfer_budget = (
+            current_squad_price
+            + float(
+                loaded_team.get(
+                    "bank",
+                    0.0,
+                )
+            )
+        )
+
+        effective_max_transfers = (
+            0
+            if optimisation_mode == "My team"
+            else applied_max_transfers
+        )
+
+        st.success(
+            f"Loaded {loaded_team['team_name']} · "
+            f"GW{loaded_team['picks_event']} squad · "
+            f"£{loaded_team['bank']:.1f}m bank"
+        )
+
+        with st.expander(
+            "Current FPL squad",
+            expanded=False,
+        ):
+            current_view = (
+                loaded_team[
+                    "squad"
+                ][
+                    [
+                        "web_name",
+                        "position",
+                        "team_name",
+                        "price",
+                    ]
+                ]
+                .copy()
+            )
+
+            st.dataframe(
+                current_view,
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "web_name":
+                        st.column_config.TextColumn(
+                            "Player"
+                        ),
+                    "position":
+                        st.column_config.TextColumn(
+                            "Pos"
+                        ),
+                    "team_name":
+                        st.column_config.TextColumn(
+                            "Team"
+                        ),
+                    "price":
+                        st.column_config.NumberColumn(
+                            "Price",
+                            format="£%.1fm",
+                        ),
+                },
+            )
+
+        if optimisation_mode == "Transfers":
+            st.caption(
+                "Transfer budget uses current model prices for your owned "
+                "players plus the public FPL bank. Exact FPL selling prices "
+                "are not exposed by the public picks endpoint, so price-profit "
+                "edge cases can differ slightly from the live game."
+            )
+
     if model_bias_pct < 0:
         st.info(
             f"Current solve: {abs(model_bias_pct)}% towards "
@@ -1177,8 +1438,19 @@ with tab_wildcard:
         )
 
     context_bits = [
-        f"{solve_horizon} GW horizon"
+        optimisation_mode,
+        f"{solve_horizon} GW horizon",
     ]
+
+    if effective_max_transfers is not None:
+        context_bits.append(
+            f"{effective_max_transfers} max transfer"
+            + (
+                "s"
+                if effective_max_transfers != 1
+                else ""
+            )
+        )
 
     if locked_player_codes:
         context_bits.append(
@@ -1230,11 +1502,135 @@ with tab_wildcard:
         excluded_teams=(
             excluded_teams
         ),
+        current_player_codes=(
+            current_player_codes
+        ),
+        max_transfers=(
+            effective_max_transfers
+        ),
+        budget=transfer_budget,
     )
 
     squad = result["squad"]
     lineups = result["lineups"]
     scored_pool = result["scored_pool"]
+
+    if optimisation_mode == "Transfers":
+        transfers_in = set(
+            result.get(
+                "transfers_in",
+                (),
+            )
+        )
+        transfers_out = set(
+            result.get(
+                "transfers_out",
+                (),
+            )
+        )
+
+        st.markdown(
+            "### Recommended transfers"
+        )
+
+        if not transfers_in:
+            st.info(
+                "No transfer improves the selected objective enough "
+                "to be required."
+            )
+        else:
+            transfer_rows = []
+
+            current_lookup = (
+                loaded_team["squad"]
+                .set_index(
+                    "player_code"
+                )
+            )
+
+            solved_lookup = (
+                scored_pool
+                .assign(
+                    player_code=(
+                        scored_pool[
+                            "player_code"
+                        ]
+                        .astype(int)
+                    )
+                )
+                .set_index(
+                    "player_code"
+                )
+            )
+
+            outs = sorted(
+                transfers_out
+            )
+            ins = sorted(
+                transfers_in
+            )
+
+            for i in range(
+                max(
+                    len(outs),
+                    len(ins),
+                )
+            ):
+                out_code = (
+                    outs[i]
+                    if i < len(outs)
+                    else None
+                )
+                in_code = (
+                    ins[i]
+                    if i < len(ins)
+                    else None
+                )
+
+                transfer_rows.append(
+                    {
+                        "Out": (
+                            current_lookup.loc[
+                                out_code,
+                                "web_name",
+                            ]
+                            if out_code is not None
+                            else ""
+                        ),
+                        "Out team": (
+                            current_lookup.loc[
+                                out_code,
+                                "team_name",
+                            ]
+                            if out_code is not None
+                            else ""
+                        ),
+                        "In": (
+                            solved_lookup.loc[
+                                in_code,
+                                "web_name",
+                            ]
+                            if in_code is not None
+                            else ""
+                        ),
+                        "In team": (
+                            solved_lookup.loc[
+                                in_code,
+                                "team_name",
+                            ]
+                            if in_code is not None
+                            else ""
+                        ),
+                    }
+                )
+
+            st.dataframe(
+                pd.DataFrame(
+                    transfer_rows
+                ),
+                hide_index=True,
+                width="stretch",
+            )
 
     # ========================================================
     # SUMMARY CARDS
@@ -1249,7 +1645,7 @@ with tab_wildcard:
 
     m2.metric(
         "Budget left",
-        f"£{100 - result['total_cost']:.1f}m",
+        f"£{result['budget'] - result['total_cost']:.1f}m",
     )
 
     m3.metric(
