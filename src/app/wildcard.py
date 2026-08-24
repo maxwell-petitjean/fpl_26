@@ -335,6 +335,9 @@ def solve_wildcard(
     included_player_codes=(),
     excluded_player_codes=(),
     excluded_teams=(),
+    current_player_codes=(),
+    max_transfers=None,
+    budget=None,
 ):
 
     pool = apply_model_bias(
@@ -348,6 +351,33 @@ def solve_wildcard(
         int(x)
         for x in included_player_codes
     }
+
+    current_player_codes = {
+        int(x)
+        for x in current_player_codes
+    }
+
+    if current_player_codes and len(current_player_codes) != 15:
+        raise ValueError(
+            "Current FPL squad must contain exactly 15 mapped players."
+        )
+
+    if max_transfers is not None:
+        max_transfers = int(max_transfers)
+        if max_transfers < 0 or max_transfers > 15:
+            raise ValueError(
+                "max_transfers must be between 0 and 15."
+            )
+        if not current_player_codes:
+            raise ValueError(
+                "max_transfers requires current_player_codes."
+            )
+
+    effective_budget = (
+        float(BUDGET)
+        if budget is None
+        else float(budget)
+    )
 
     excluded_player_codes = {
         int(x)
@@ -447,13 +477,35 @@ def solve_wildcard(
             .copy()
         )
 
-    pool = (
-        pool[
-            pool["solver_eligible"]
-            .fillna(False)
-        ]
-        .copy()
+    # New transfer targets must be solver eligible, but an owned
+    # player must remain available so the optimiser can either keep
+    # or sell them even if their current status/minutes would normally
+    # remove them from the candidate pool.
+    eligible_mask = (
+        pool["solver_eligible"]
+        .fillna(False)
     )
+
+    if current_player_codes:
+        owned_mask = (
+            pool["player_code"]
+            .astype(int)
+            .isin(current_player_codes)
+        )
+        pool = (
+            pool[
+                eligible_mask
+                | owned_mask
+            ]
+            .copy()
+        )
+    else:
+        pool = (
+            pool[
+                eligible_mask
+            ]
+            .copy()
+        )
 
     if included_player_codes:
         eligible_codes = set(
@@ -638,6 +690,38 @@ def solve_wildcard(
         == 15
     )
 
+    # Current-team / transfer mode:
+    # a transfer is one player entering the final 15-player squad.
+    # With a 15-player starting squad, requiring at least
+    # 15 - max_transfers owned players to remain is equivalent.
+    if current_player_codes and max_transfers is not None:
+        current_available = [
+            p
+            for p in players
+            if p in current_player_codes
+        ]
+
+        if len(current_available) != 15:
+            missing = sorted(
+                current_player_codes
+                - set(current_available)
+            )
+            raise ValueError(
+                "Current squad players are missing after solver filtering: "
+                f"{missing}"
+            )
+
+        model += (
+            pulp.lpSum(
+                squad[p]
+                for p in current_available
+            )
+            >= (
+                15
+                - max_transfers
+            )
+        )
+
     model += (
         pulp.lpSum(
             float(
@@ -649,7 +733,7 @@ def solve_wildcard(
             * squad[p]
             for p in players
         )
-        <= BUDGET
+        <= effective_budget
     )
 
     for position, required in (
@@ -895,6 +979,25 @@ def solve_wildcard(
         lineup_rows
     )
 
+    selected_set = set(
+        int(x)
+        for x in selected_ids
+    )
+
+    transfers_in = tuple(
+        sorted(
+            selected_set
+            - current_player_codes
+        )
+    ) if current_player_codes else ()
+
+    transfers_out = tuple(
+        sorted(
+            current_player_codes
+            - selected_set
+        )
+    ) if current_player_codes else ()
+
     return {
         "squad": selected,
         "lineups": lineups,
@@ -918,6 +1021,14 @@ def solve_wildcard(
         "included_player_codes": tuple(
             sorted(included_player_codes)
         ),
+        "current_player_codes": tuple(
+            sorted(current_player_codes)
+        ),
+        "max_transfers": max_transfers,
+        "transfers_in": transfers_in,
+        "transfers_out": transfers_out,
+        "transfer_count": len(transfers_in),
+        "budget": effective_budget,
         "excluded_player_codes": tuple(
             sorted(excluded_player_codes)
         ),
