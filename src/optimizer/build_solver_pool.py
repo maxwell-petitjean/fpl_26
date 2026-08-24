@@ -426,12 +426,28 @@ def build_solver_pool(
             "team_id",
             "team_code",
             "team_short_name",
+            "fpl_element_id",
+            "fpl_element_id_gw",
             "status",
             "availability_pct",
             "is_new_player",
         ]
         if c in df.columns
     ]
+
+    # FPL's public picks endpoint returns the current-season
+    # element id. Keep a canonical fpl_element_id in the solver pool
+    # so a user's FPL team can be mapped to player_code without names.
+    if (
+        "fpl_element_id" not in meta_source.columns
+        and "fpl_element_id_gw" in meta_source.columns
+    ):
+        meta_source["fpl_element_id"] = (
+            pd.to_numeric(
+                meta_source["fpl_element_id_gw"],
+                errors="coerce",
+            )
+        )
 
     meta = (
         meta_source
