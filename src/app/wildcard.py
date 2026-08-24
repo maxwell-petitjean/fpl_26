@@ -332,6 +332,7 @@ def solve_wildcard(
     solver_pool: pd.DataFrame,
     model_bias: float = 0.0,
     horizon_weeks: int = 8,
+    included_player_codes=(),
     excluded_player_codes=(),
     excluded_teams=(),
 ):
@@ -343,6 +344,11 @@ def solve_wildcard(
         ),
     )
 
+    included_player_codes = {
+        int(x)
+        for x in included_player_codes
+    }
+
     excluded_player_codes = {
         int(x)
         for x in excluded_player_codes
@@ -352,6 +358,71 @@ def solve_wildcard(
         str(x)
         for x in excluded_teams
     }
+
+    conflicting_players = (
+        included_player_codes
+        & excluded_player_codes
+    )
+
+    if conflicting_players:
+        raise ValueError(
+            "A player cannot be both locked and excluded. "
+            f"Conflicting player codes: {sorted(conflicting_players)}"
+        )
+
+    # Validate locked players BEFORE applying exclusions so that
+    # team exclusions produce a clear error rather than silently
+    # removing a locked player.
+    if included_player_codes:
+        source_codes = (
+            pool["player_code"]
+            .astype(int)
+        )
+
+        missing_locked = (
+            included_player_codes
+            - set(source_codes.tolist())
+        )
+
+        if missing_locked:
+            raise ValueError(
+                "Locked player(s) are not present in the solver pool: "
+                f"{sorted(missing_locked)}"
+            )
+
+        locked_rows = pool[
+            source_codes.isin(
+                included_player_codes
+            )
+        ].copy()
+
+        locked_on_excluded_teams = (
+            locked_rows[
+                locked_rows["team_name"]
+                .astype(str)
+                .isin(excluded_teams)
+            ]
+        )
+
+        if not locked_on_excluded_teams.empty:
+            conflicts = (
+                locked_on_excluded_teams[
+                    ["web_name", "team_name"]
+                ]
+                .drop_duplicates()
+            )
+
+            conflict_text = ", ".join(
+                f"{r.web_name} ({r.team_name})"
+                for r in conflicts.itertuples(
+                    index=False
+                )
+            )
+
+            raise ValueError(
+                "Locked player(s) belong to an excluded team: "
+                + conflict_text
+            )
 
     if excluded_player_codes:
         pool = (
@@ -383,6 +454,24 @@ def solve_wildcard(
         ]
         .copy()
     )
+
+    if included_player_codes:
+        eligible_codes = set(
+            pool["player_code"]
+            .astype(int)
+            .tolist()
+        )
+
+        unavailable_locked = (
+            included_player_codes
+            - eligible_codes
+        )
+
+        if unavailable_locked:
+            raise ValueError(
+                "Locked player(s) are not solver eligible: "
+                f"{sorted(unavailable_locked)}"
+            )
 
     if (
         pool["player_code"]
@@ -481,6 +570,20 @@ def solve_wildcard(
         )
         for p in players
     }
+
+    # Locked players MUST be selected in the 15-player squad.
+    # They are not forced into the Starting XI; the optimiser
+    # remains free to bench them in any gameweek.
+    for player_code in included_player_codes:
+        if player_code not in squad:
+            raise ValueError(
+                f"Locked player {player_code} "
+                "is not available after solver filtering."
+            )
+
+        model += (
+            squad[player_code] == 1
+        )
 
     start = {
         (p, gw):
@@ -811,6 +914,9 @@ def solve_wildcard(
         "gameweeks": gameweeks,
         "horizon_weeks": int(
             horizon_weeks
+        ),
+        "included_player_codes": tuple(
+            sorted(included_player_codes)
         ),
         "excluded_player_codes": tuple(
             sorted(excluded_player_codes)
