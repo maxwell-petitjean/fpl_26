@@ -15,6 +15,7 @@ def solve_wildcard_cached(
     solver_pool,
     model_bias,
     horizon_weeks,
+    locked_player_codes,
     excluded_player_codes,
     excluded_teams,
 ):
@@ -22,6 +23,9 @@ def solve_wildcard_cached(
         solver_pool,
         model_bias=model_bias,
         horizon_weeks=horizon_weeks,
+        included_player_codes=(
+            locked_player_codes
+        ),
         excluded_player_codes=(
             excluded_player_codes
         ),
@@ -870,6 +874,14 @@ with tab_wildcard:
         ] = 8
 
     if (
+        "applied_locked_player_codes"
+        not in st.session_state
+    ):
+        st.session_state[
+            "applied_locked_player_codes"
+        ] = ()
+
+    if (
         "applied_excluded_player_codes"
         not in st.session_state
     ):
@@ -927,7 +939,7 @@ with tab_wildcard:
         )
 
         st.markdown(
-            "#### Exclusions"
+            "#### Squad controls"
         )
 
         player_options = (
@@ -962,6 +974,34 @@ with tab_wildcard:
             for row
             in player_options.itertuples()
         }
+
+        selected_locked_player_codes = (
+            st.multiselect(
+                "Lock players",
+                options=list(
+                    player_label_map.keys()
+                ),
+                default=list(
+                    st.session_state[
+                        "applied_locked_player_codes"
+                    ]
+                ),
+                format_func=lambda player_code:
+                    player_label_map[
+                        player_code
+                    ],
+                placeholder=(
+                    "Search player name..."
+                ),
+                help=(
+                    "Locked players must be included in the 15-player squad. "
+                    "The optimiser still decides whether they start each gameweek."
+                ),
+                key=(
+                    "locked_players_input"
+                ),
+            )
+        )
 
         selected_excluded_player_codes = (
             st.multiselect(
@@ -1060,6 +1100,14 @@ with tab_wildcard:
         )
 
         st.session_state[
+            "applied_locked_player_codes"
+        ] = tuple(
+            int(x)
+            for x
+            in selected_locked_player_codes
+        )
+
+        st.session_state[
             "applied_excluded_player_codes"
         ] = tuple(
             int(x)
@@ -1089,6 +1137,12 @@ with tab_wildcard:
     solve_horizon = int(
         st.session_state[
             "applied_solve_horizon"
+        ]
+    )
+
+    locked_player_codes = tuple(
+        st.session_state[
+            "applied_locked_player_codes"
         ]
     )
 
@@ -1126,6 +1180,16 @@ with tab_wildcard:
         f"{solve_horizon} GW horizon"
     ]
 
+    if locked_player_codes:
+        context_bits.append(
+            f"{len(locked_player_codes)} locked player"
+            + (
+                "s"
+                if len(locked_player_codes) != 1
+                else ""
+            )
+        )
+
     if excluded_player_codes:
         context_bits.append(
             f"{len(excluded_player_codes)} player exclusion"
@@ -1157,6 +1221,9 @@ with tab_wildcard:
         solver_pool,
         model_bias=model_bias,
         horizon_weeks=solve_horizon,
+        locked_player_codes=(
+            locked_player_codes
+        ),
         excluded_player_codes=(
             excluded_player_codes
         ),
