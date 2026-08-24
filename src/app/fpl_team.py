@@ -1,4 +1,5 @@
 import requests
+import pandas as pd
 
 
 FPL_BASE_URL = "https://fantasy.premierleague.com/api"
@@ -142,6 +143,15 @@ def load_fpl_team(team_id: int) -> dict:
         else None
     )
 
+    element_code_map = {
+        int(element["id"]): int(element["code"])
+        for element in bootstrap.get("elements", [])
+        if (
+            element.get("id") is not None
+            and element.get("code") is not None
+        )
+    }
+
     return {
         "team_id": team_id,
         "team_name": entry.get("name") or f"Team {team_id}",
@@ -155,6 +165,7 @@ def load_fpl_team(team_id: int) -> dict:
         "picks_event": int(picks_event),
         "current_event": int(current_event),
         "element_ids": tuple(element_ids),
+        "element_code_map": element_code_map,
         "bank": bank_m,
         "squad_value": squad_value_m,
         "available_budget": available_budget_m,
@@ -168,18 +179,30 @@ def map_fpl_team_to_solver(
     solver_pool,
 ) -> dict:
     """
-    Map FPL element ids to the model's stable player_code.
+    Map current-season FPL element ids to the model's stable player_code.
+
+    Important:
+      FPL element ids are season-specific and can change every season.
+      FPL's `code` field is the stable player identifier used by the
+      modelling pipeline as player_code.
+
+    Therefore:
+      picks.element -> bootstrap.elements[id].code -> solver.player_code
     """
-    if "fpl_element_id" not in solver_pool.columns:
+
+    element_code_map = team.get(
+        "element_code_map",
+        {}
+    )
+
+    if not element_code_map:
         raise FPLTeamError(
-            "Solver pool is missing fpl_element_id. "
-            "Rebuild it with the updated build_solver_pool.py."
+            "FPL bootstrap data did not contain an element-to-code mapping."
         )
 
-    mapping = (
+    solver = (
         solver_pool[
             [
-                "fpl_element_id",
                 "player_code",
                 "web_name",
                 "position",
@@ -189,59 +212,113 @@ def map_fpl_team_to_solver(
         ]
         .dropna(
             subset=[
-                "fpl_element_id",
                 "player_code",
             ]
         )
         .drop_duplicates(
-            "fpl_element_id"
+            "player_code"
         )
         .copy()
     )
 
-    mapping["fpl_element_id"] = (
-        mapping["fpl_element_id"]
-        .astype(int)
-    )
-    mapping["player_code"] = (
-        mapping["player_code"]
+    solver["player_code"] = (
+        solver["player_code"]
         .astype(int)
     )
 
-    by_element = (
-        mapping.set_index(
-            "fpl_element_id"
+    by_code = (
+        solver.set_index(
+            "player_code"
         )
     )
 
-    missing = [
-        element_id
-        for element_id in team["element_ids"]
-        if element_id not in by_element.index
-    ]
+    mapped_rows = []
+    missing_elements = []
+    missing_codes = []
 
-    if missing:
-        raise FPLTeamError(
-            "Some players in this FPL squad are missing from the "
-            f"solver pool. Missing FPL element ids: {missing}"
+    for element_id in team["element_ids"]:
+
+        player_code = (
+            element_code_map.get(
+                int(element_id)
+            )
         )
 
-    player_codes = tuple(
-        int(
-            by_element.loc[
-                element_id,
-                "player_code",
+        if player_code is None:
+            missing_elements.append(
+                int(element_id)
+            )
+            continue
+
+        if int(player_code) not in by_code.index:
+            missing_codes.append(
+                {
+                    "element_id":
+                        int(element_id),
+                    "player_code":
+                        int(player_code),
+                }
+            )
+            continue
+
+        row = (
+            by_code.loc[
+                int(player_code)
             ]
         )
-        for element_id in team["element_ids"]
+
+        mapped_rows.append(
+            {
+                "fpl_element_id":
+                    int(element_id),
+                "player_code":
+                    int(player_code),
+                "web_name":
+                    row["web_name"],
+                "position":
+                    row["position"],
+                "team_name":
+                    row["team_name"],
+                "price":
+                    row["price"],
+            }
+        )
+
+    if missing_elements:
+        raise FPLTeamError(
+            "Some FPL element ids were not present in bootstrap-static: "
+            f"{missing_elements}"
+        )
+
+    if missing_codes:
+        details = ", ".join(
+            (
+                f"element {x['element_id']} "
+                f"-> player_code {x['player_code']}"
+            )
+            for x in missing_codes
+        )
+
+        raise FPLTeamError(
+            "Some current FPL players could not be matched to the "
+            "solver pool by stable player_code: "
+            + details
+        )
+
+    if len(mapped_rows) != 15:
+        raise FPLTeamError(
+            f"Expected 15 mapped players, received {len(mapped_rows)}."
+        )
+
+    squad = pd.DataFrame(
+        mapped_rows
     )
 
-    squad = (
-        by_element.loc[
-            list(team["element_ids"])
-        ]
-        .reset_index()
-        .copy()
+    player_codes = tuple(
+        int(x)
+        for x in squad[
+            "player_code"
+        ].tolist()
     )
 
     return {
