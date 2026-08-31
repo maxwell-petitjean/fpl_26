@@ -510,7 +510,8 @@ st.set_page_config(
 
 st.title("FPL Solver")
 st.caption(
-    "Model-led player pool and optimal wildcard squad."
+    "Predictive model player pool and optimal squad builder.\n"
+    "GW2 is (nearly) done. Ready to optimise for GW3"
 )
 
 solver_pool = load_solver_pool()
@@ -1054,7 +1055,7 @@ with tab_wildcard:
                     "applied_fpl_team_id"
                 ]
             ),
-            placeholder="Enter your FPL Team ID",
+            placeholder=2403195,
             help=(
                 "Required for My team and Transfers modes. "
                 "The app loads the latest publicly available 15-player squad."
