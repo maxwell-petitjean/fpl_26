@@ -7,6 +7,10 @@ import yaml
 
 CONFIG_PATH = Path("config/solver.yaml")
 
+SEASON_SNAPSHOT_PATH = Path(
+    "data/outputs/solver/season_snapshot.csv"
+)
+
 FORM_WEIGHTS = {
     6: 0.50,
     12: 0.30,
@@ -31,6 +35,70 @@ FIXTURE_SENSITIVE_POSITIONS = {
 def _load_config(path=CONFIG_PATH):
     with open(path, "r") as f:
         return yaml.safe_load(f)
+
+
+def _load_season_snapshot(
+    path=SEASON_SNAPSHOT_PATH,
+):
+    """
+    Load optional current-season player snapshot.
+
+    If it has not been built yet, return an empty frame so the
+    solver can still run; the website simply shows blank/zero
+    season-to-date columns until the snapshot is created.
+    """
+
+    path = Path(
+        path
+    )
+
+    if not path.exists():
+        print(
+            "Season snapshot not found:",
+            path,
+        )
+
+        return pd.DataFrame(
+            columns=[
+                "player_code",
+                "season_minutes",
+                "season_total_points",
+                "season_pp90",
+                "season_goals",
+                "season_assists",
+                "season_xg",
+                "season_xa",
+                "season_xg90",
+                "season_xa90",
+                "season_defcon_points",
+                "season_defcon_per90",
+            ]
+        )
+
+    snapshot = pd.read_csv(
+        path,
+        low_memory=False,
+    )
+
+    if (
+        "player_code"
+        not in snapshot.columns
+    ):
+        raise ValueError(
+            "Season snapshot missing player_code."
+        )
+
+    if (
+        snapshot["player_code"]
+        .duplicated()
+        .any()
+    ):
+        raise ValueError(
+            "Season snapshot is not unique "
+            "to player_code."
+        )
+
+    return snapshot
 
 
 def _weighted_columns(
@@ -426,28 +494,12 @@ def build_solver_pool(
             "team_id",
             "team_code",
             "team_short_name",
-            "fpl_element_id",
-            "fpl_element_id_gw",
             "status",
             "availability_pct",
             "is_new_player",
         ]
         if c in df.columns
     ]
-
-    # FPL's public picks endpoint returns the current-season
-    # element id. Keep a canonical fpl_element_id in the solver pool
-    # so a user's FPL team can be mapped to player_code without names.
-    if (
-        "fpl_element_id" not in meta_source.columns
-        and "fpl_element_id_gw" in meta_source.columns
-    ):
-        meta_source["fpl_element_id"] = (
-            pd.to_numeric(
-                meta_source["fpl_element_id_gw"],
-                errors="coerce",
-            )
-        )
 
     meta = (
         meta_source
@@ -533,6 +585,56 @@ def build_solver_pool(
         how="left",
         validate="one_to_one",
     )
+
+    # --------------------------------------------------------
+    # CURRENT-SEASON ACTUAL SNAPSHOT
+    #
+    # Separate one-row-per-player table built from actual
+    # current-season matches only.
+    # --------------------------------------------------------
+
+    season_snapshot = (
+        _load_season_snapshot()
+    )
+
+    if not season_snapshot.empty:
+        meta = meta.merge(
+            season_snapshot.drop(
+                columns=[
+                    "season",
+                ],
+                errors="ignore",
+            ),
+            on="player_code",
+            how="left",
+            validate="one_to_one",
+        )
+
+    season_stat_cols = [
+        "season_minutes",
+        "season_total_points",
+        "season_pp90",
+        "season_goals",
+        "season_assists",
+        "season_xg",
+        "season_xa",
+        "season_xg90",
+        "season_xa90",
+        "season_defcon_points",
+        "season_defcon_per90",
+    ]
+
+    for col in season_stat_cols:
+        if col not in meta.columns:
+            meta[col] = 0.0
+        else:
+            meta[col] = (
+                pd.to_numeric(
+                    meta[col],
+                    errors="coerce",
+                )
+                .fillna(0.0)
+            )
 
     named_aggs = {
         "fixtures": (
@@ -1031,6 +1133,16 @@ def build_solver_pool(
     print(
         "Canonical xp unchanged; "
         "mean-reversion and full-fixture anchors added."
+    )
+    print(
+        "Current-season snapshot players:",
+        int(
+            (
+                pool["season_minutes"]
+                > 0
+            )
+            .sum()
+        ),
     )
 
     return {
