@@ -4,7 +4,7 @@ a1234,Example Player,75,Example manual override,FALSE
 219168,Isak,80,gw1,TRUE
 446008,Mbeumo,75,gw1,TRUE
 430871,Cunha,60,gw1,TRUE
-494595,Wirtz,70,gw1,TRUE
+494595,Wirtz,70,gw1,FALSE
 224117,Gyokeres,60,gw1,TRUE
 219847,Havertz,60,gw1,TRUE
 247348,Munoz,75,gw1,TRUE
@@ -13,10 +13,19 @@ a1234,Example Player,75,Example manual override,FALSE
 538207,Osula,45,gw1,FALSE
 116535,A.Becker,90,gw1,TRUE
 154561,Raya,90,gw1,TRUE
-a1234,Example Player,75,Example manual override,FALSE
-538207,Osula,65,gw2,TRUE
+a1234,newGameweek,99,newGameweek,FALSE
+538207,Osula,65,gw2,FALSE
 448047,EnzoF,35,gw2,TRUE
-178301,Watkins,20,gw2,TRUE
+178301,Watkins,20,gw2,FALSE
 437730,Semenyo,80,gw2,TRUE
-244851,Palmer,75,gw2,TRUE
+244851,Palmer,75,gw2,FALSE
 216646,Wissa,80,gw2,TRUE
+a1234,newGameweek,99,newGameweek,FALSE
+178301,Watkins,1,gw3,TRUE
+538207,Osula,45,gw3,TRUE
+244851,Palmer,80,gw3,TRUE
+494595,Wirtz,80,gw3,TRUE
+475168,João Pedro,80,gw3,TRUE
+244850,Rogers,80,gw3,TRUE
+472769,OReilly,80,gw3,TRUE
+
