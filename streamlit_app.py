@@ -636,6 +636,17 @@ with tab_pool:
         "fixture_full_uplift_8gw",
         "avg_fixture_multiplier_8gw",
         "solver_eligible",
+        "season_minutes",
+        "season_total_points",
+        "season_pp90",
+        "season_goals",
+        "season_assists",
+        "season_xg",
+        "season_xa",
+        "season_xg90",
+        "season_xa90",
+        "season_defcon_points",
+        "season_defcon_per90",
     ]
 
     display_columns = [
@@ -722,6 +733,61 @@ with tab_pool:
                 st.column_config.NumberColumn(
                     "L38 Δ xP",
                     format="%+.2f",
+                ),
+            "season_minutes":
+                st.column_config.NumberColumn(
+                    "Season mins",
+                    format="%.0f",
+                ),
+            "season_total_points":
+                st.column_config.NumberColumn(
+                    "Season pts",
+                    format="%.0f",
+                ),
+            "season_pp90":
+                st.column_config.NumberColumn(
+                    "Season PP90",
+                    format="%.2f",
+                ),
+            "season_goals":
+                st.column_config.NumberColumn(
+                    "Goals",
+                    format="%.0f",
+                ),
+            "season_assists":
+                st.column_config.NumberColumn(
+                    "Assists",
+                    format="%.0f",
+                ),
+            "season_xg":
+                st.column_config.NumberColumn(
+                    "xG",
+                    format="%.2f",
+                ),
+            "season_xa":
+                st.column_config.NumberColumn(
+                    "xA",
+                    format="%.2f",
+                ),
+            "season_xg90":
+                st.column_config.NumberColumn(
+                    "xG90",
+                    format="%.2f",
+                ),
+            "season_xa90":
+                st.column_config.NumberColumn(
+                    "xA90",
+                    format="%.2f",
+                ),
+            "season_defcon_points":
+                st.column_config.NumberColumn(
+                    "DefCon pts",
+                    format="%.0f",
+                ),
+            "season_defcon_per90":
+                st.column_config.NumberColumn(
+                    "DefCon/90",
+                    format="%.2f",
                 ),
             "fixture_xpp90_full_8gw":
                 st.column_config.NumberColumn(
@@ -955,7 +1021,6 @@ with tab_wildcard:
                 "Optimisation mode",
                 options=[
                     "Wildcard",
-                    "My team",
                     "Transfers",
                 ],
                 default=st.session_state[
@@ -963,9 +1028,8 @@ with tab_wildcard:
                 ],
                 help=(
                     "Wildcard builds the best squad from scratch. "
-                    "My team keeps your current 15 and optimises the XI. "
-                    "Transfers starts from your current squad and allows "
-                    "a limited number of changes."
+                    "Transfers starts from your current FPL squad and allows "
+                    "a limited number of changes, including 0 transfers."
                 ),
             )
         )
@@ -990,6 +1054,7 @@ with tab_wildcard:
             st.segmented_control(
                 "Maximum transfers",
                 options=[
+                    0,
                     1,
                     2,
                     3,
@@ -999,7 +1064,9 @@ with tab_wildcard:
                 ],
                 help=(
                     "Used only in Transfers mode. "
-                    "The optimiser may use fewer transfers if that scores better."
+                    "0 keeps your existing 15 and optimises the Starting XI. "
+                    "For 1–3, the optimiser may use fewer transfers if that "
+                    "scores better."
                 ),
             )
         )
@@ -1306,10 +1373,7 @@ with tab_wildcard:
     loaded_team = None
     effective_max_transfers = None
 
-    if optimisation_mode in {
-        "My team",
-        "Transfers",
-    }:
+    if optimisation_mode == "Transfers":
         if not fpl_team_id:
             st.warning(
                 "Enter an FPL Team ID and click Run optimisation."
@@ -1357,9 +1421,7 @@ with tab_wildcard:
         )
 
         effective_max_transfers = (
-            0
-            if optimisation_mode == "My team"
-            else applied_max_transfers
+            applied_max_transfers
         )
 
         st.success(
