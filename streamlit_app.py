@@ -660,10 +660,21 @@ with tab_pool:
             "position",
             "team_name",
             "price",
+            "xp_8gw",
             "xmins_next_gw",
             "xp_next_gw",
-            "xp_8gw",
-            "weighted_xp_8gw",
+            "model_xpp90_8gw",
+            "mean_reversion_xpp90_8gw",
+            "season_pp90",
+            "season_total_points",
+            "season_goals",
+            "season_assists",
+            "season_xg",
+            "season_xa",
+            "season_xg90",
+            "season_xa90",
+            "season_defcon_points",
+            "season_defcon_per90"
         ]
         if c in display_columns
     ]
