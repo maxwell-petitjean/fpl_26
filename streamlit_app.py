@@ -1046,21 +1046,28 @@ with tab_wildcard:
             )
         )
 
-        selected_fpl_team_id = st.number_input(
+        selected_fpl_team_id = st.text_input(
             "FPL Team ID",
-            min_value=1,
-            step=1,
-            value=(
-                st.session_state[
-                    "applied_fpl_team_id"
-                ]
-            ),
-            placeholder=2403195,
+            value="",
+            placeholder="e.g. 2403195",
             help=(
-                "Required for My team and Transfers modes. "
-                "The app loads the latest publicly available 15-player squad."
+                "Enter your FPL Team ID. "
+                "The app loads your latest publicly available 15-player squad."
             ),
         )
+        
+        if selected_fpl_team_id:
+            try:
+                selected_fpl_team_id = int(
+                    selected_fpl_team_id
+                )
+            except ValueError:
+                st.error(
+                    "FPL Team ID must be a number."
+                )
+                selected_fpl_team_id = None
+        else:
+            selected_fpl_team_id = None
 
         selected_max_transfers = (
             st.segmented_control(
