@@ -511,7 +511,7 @@ st.set_page_config(
 st.title("FPL Solver")
 st.caption(
     "Predictive model player pool and optimal squad builder.\n"
-    "GW4 is done. Ready to optimise for GW5"
+    "GW5 is done. Ready to optimise for GW6"
 )
 
 solver_pool = load_solver_pool()
